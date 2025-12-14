@@ -18,6 +18,6 @@ int main() {
         x = x + 2;
     }
 
-    int z = z + 1;
+    z = z + 1;
     return i + x;
 }
