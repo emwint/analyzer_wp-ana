@@ -72,8 +72,5 @@ struct
 
   let combine_env man (lval:lval option) fexp (f:fundec) (args:exp list) fc au (f_ask: Queries.ask) =
     au
+
 end
-
-
-let _ =
-  MCP.register_analysis (module Spec : MCPSpec)

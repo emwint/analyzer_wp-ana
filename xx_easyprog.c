@@ -21,3 +21,5 @@ int main() {
     z = z + 1;
     return i + x;
 }
+
+//git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ml|mli)$' | xargs -I {} ocp-indent -i {}

@@ -791,7 +791,7 @@ struct
   (* Set of triples [RT] *)
   module LT = SetDomain.HeadlessSet (RT)
   (* Analysis result structure---a hashtable from program points to [LT] *)
-  module Result = AnalysisResult.Result (LT) (struct let result_name = "analysis" end)
+  module Result = AnalysisResult.Result (LT) (struct let result_name = "wp_analysis" end)
   module ResultOutput = AnalysisResultOutput.Make (Result)
 
   module Query = ResultQuery.Query (SpecSys)
@@ -1496,11 +1496,11 @@ struct
     if get_string "result" <> "none" then Logs.debug "Generating output: %s" (get_string "result");
 
     Messages.finalize ();
-    Timing.wrap "result output" (ResultOutput.output (lazy local_xml) liveness gh make_global_fast_xml) (module FileCfg);
+    (* Timing.wrap "result output" (ResultOutput.output (lazy local_xml) liveness gh make_global_fast_xml) (module FileCfg); *)
 
+    (*TODO: Script adding these results to the already existing node xml files*)
 
     (*Iterating through elements of lh and Logging the contents*)
-
     let log_lh_contents lh =
       Messages.warn "=== LHT Contents ===";     let count = ref 0 in
 
@@ -1532,6 +1532,55 @@ struct
       Logs.debug "=== End LHT Contents ==="
     in
     log_lh_contents lh;
+
+    (*Script adding these results to the already existing node xml files*)
+    let output_wp_results_to_xml lh =
+      (* iterate through all nodes and update corresponding .xml in result/nodes *)
+      LHT.iter (fun (node, ctx) state ->
+          try
+            (* Get node ID as string *)
+            (* let node_id_str = match node with
+               | MyCFG.Statement stmt -> string_of_int stmt.sid
+               | MyCFG.FunctionEntry fundec -> string_of_int fundec.svar.vid
+               | _ -> raise Not_found  (* Skip non-statement nodes *)
+               in *)
+            let node_id_str = Node.show_id node in
+
+            let xml_path = Filename.concat "./result/nodes" (node_id_str ^ ".xml") in
+            if Sys.file_exists xml_path then (
+              (* Read existing XML *)
+              let ic = Stdlib.open_in xml_path in
+              let content = Stdlib.really_input_string ic (Stdlib.in_channel_length ic) in
+              Stdlib.close_in ic;
+
+              (* Create WP analysis data *)
+              let wp_res = Pretty.sprint 100 (Spec.D.pretty () state) in
+              let wp_data =
+                "\n<wp_path>\n<analysis name=\"wp_test\">\n<value>\n<data>" ^ wp_res ^" \n</data>\n</value>\n</analysis>\n</wp_path>\n"
+              in
+
+              (* Insert before </path>*)
+              let close_pattern = "</call>" in
+              let updated_content =
+                try
+                  let insert_pos = Str.search_backward (Str.regexp_string close_pattern) content (String.length content) in
+                  let before = String.sub content 0 insert_pos in
+                  let after = String.sub content insert_pos (String.length content - insert_pos) in
+                  before ^ wp_data ^ after
+                with Not_found ->
+                  content ^ wp_data
+              in
+
+              (* Write back *)
+              let oc = Stdlib.open_out xml_path in
+              Stdlib.output_string oc updated_content;
+              Stdlib.close_out oc;
+              Logs.debug "Updated XML file for node %s" node_id_str
+            )
+          with _ -> ()  (* Skip errors silently *)
+        ) lh
+    in
+    output_wp_results_to_xml lh;
 end
 
 
@@ -1922,7 +1971,7 @@ let rec analyze_loop (module CFG : CfgBidirSkip) file fs change_info =
     let module DummyWPSPec = Wp_test.Spec in
     let module B = AnalyzeCFG_2 (CFG) (DummyWPSPec) (struct let increment = change_info end) in
     GobConfig.with_immutable_conf (fun () ->
-        (*A.analyze file fs;*)
+        A.analyze file fs;
         B.analyze file fs
       )
   with Refinement.RestartAnalysis ->
