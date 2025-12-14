@@ -25,7 +25,7 @@ end
 
 
 (** The main point of this file---generating a [DemandGlobConstrSys] from a [Spec]. *)
-module FromSpec (S:Spec) (Cfg:CfgForward) (I: Increment)
+module FromSpec (S:Spec) (Cfg:CfgBidir)
   : sig
     include DemandGlobConstrSys with module LVar = VarF (S.C)
                                  and module GVar = GVarF (S.V)
@@ -143,6 +143,7 @@ struct
   let tf_assign var edge prev_node lv e getl sidel demandl getg sideg d =
     let man, r, spawns = common_man var edge prev_node d getl sidel demandl getg sideg in
     let d = S.assign man lv e in (* Force transfer function to be evaluated before dereferencing in common_join argument. *)
+    Logs.debug "######### there was an assign";
     common_join man d !r !spawns
 
   let tf_vdecl var edge prev_node v getl sidel demandl getg sideg d =
@@ -390,16 +391,34 @@ struct
       )
 
   let system (v,c) =
-    match v with
-    | FunctionEntry _ ->
-      None
-    | _ ->
-      let tf getl sidel demandl getg sideg =
-        let tf' eu = tf (v,c) eu getl sidel demandl getg sideg in
-        let xs = List.map tf' (Cfg.next v) in
-        List.fold_left S.D.join (S.D.bot ()) xs
-      in
-      Some tf
+
+    let wrap (v,c) = 
+      match v with
+      | FunctionEntry _ ->
+        let tf getl sidel demandl getg sideg =
+          let tf' eu = tf (v,c) eu getl sidel demandl getg sideg in
+          let xs = List.map tf' (Cfg.next v) in
+          List.fold_left S.D.join (S.D.bot ()) xs
+        in
+        Logs.debug "## Function Entry" ;
+        Some tf
+      | Function _ ->
+        Logs.debug "## Function call?" ;
+        None
+      | _ ->
+        let tf getl sidel demandl getg sideg =
+          let tf' eu = tf (v,c) eu getl sidel demandl getg sideg in
+          let xs = List.map tf' (Cfg.next v) in
+          List.fold_left S.D.join (S.D.bot ()) xs
+        in
+        Logs.debug "## Not Function Entry. Number of nexts: %d" (List.length (Cfg.next v)) ;
+        Logs.debug "##                     Number of prevs: %d" (List.length (Cfg.prev v)) ;
+        Some tf
+
+    in
+
+    Logs.debug "# Creating transfer function for node %s" (Node.show v);
+    wrap (v,c)
 
 
   let iter_vars getl getg vq fl fg =
