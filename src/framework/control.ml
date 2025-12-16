@@ -1962,10 +1962,10 @@ struct
 end
 
 (** This function was originally a part of the [AnalyzeCFG] module, but
-   now that [AnalyzeCFG] takes [Spec] as a functor parameter,
-   [analyze_loop] cannot reside in it anymore since each invocation of
-   [get_spec] in the loop might/should return a different module, and we
-   cannot swap the functor parameter from inside [AnalyzeCFG]. *)
+    now that [AnalyzeCFG] takes [Spec] as a functor parameter,
+    [analyze_loop] cannot reside in it anymore since each invocation of
+    [get_spec] in the loop might/should return a different module, and we
+    cannot swap the functor parameter from inside [AnalyzeCFG]. *)
 let rec analyze_loop (module CFG : CfgBidirSkip) file fs change_info =
   try
     let (module Spec) = get_spec () in

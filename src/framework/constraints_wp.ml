@@ -414,7 +414,7 @@ struct
           let xs = List.map tf' (Cfg.next v) in
           List.fold_left S.D.join (S.D.bot ()) xs
         in
-       
+
         Some tf
 
     in
@@ -424,10 +424,10 @@ struct
     Logs.debug "  Number of prevs: %d" (List.length (Cfg.prev v)) ;
     wrap (v,c)
 
-  
+
   (* what does this do? *)
   let iter_vars getl getg vq fl fg =
-      failwith "iter_vars not implemented in WP"
+    failwith "iter_vars not implemented in WP"
 
 
   let sys_change getl getg =

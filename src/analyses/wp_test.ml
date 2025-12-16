@@ -44,13 +44,13 @@ struct
 
   let assign man (lval:lval) (rval:exp) =
     (* let () =
-      Logs.debug "=== man (analysis manager) info ===";
-      Logs.debug "  lval: %a" CilType.Lval.pretty lval;
-      Logs.debug "  rval: %a" CilType.Exp.pretty rval;
-      Logs.debug "  local state: %a" D.pretty man.local;
-      Logs.debug "  local is_top: %b" (D.is_top man.local);
-      Logs.debug "  local is_bot: %b" (D.is_bot man.local);
-    in *)
+       Logs.debug "=== man (analysis manager) info ===";
+       Logs.debug "  lval: %a" CilType.Lval.pretty lval;
+       Logs.debug "  rval: %a" CilType.Exp.pretty rval;
+       Logs.debug "  local state: %a" D.pretty man.local;
+       Logs.debug "  local is_top: %b" (D.is_top man.local);
+       Logs.debug "  local is_bot: %b" (D.is_bot man.local);
+       in *)
 
     let v = vars_from_lval lval in
 
@@ -74,18 +74,18 @@ struct
   (* TODO *)
   let enter man (lval: lval option) (f:fundec) (args:exp list) =
     Logs.debug "=== enter function %s ===" f.svar.vname;
-    
+
     [man.local, D.bot()]
 
   (* TODO *)
   let combine_env man (lval:lval option) fexp (f:fundec) (args:exp list) fc au (f_ask: Queries.ask) =
     Logs.debug "=== combine_env of function %s ===" f.svar.vname;
-    
+
     D.join man.local au 
-  
+
   let combine_assign man (lval:lval option) fexp (f:fundec) (args:exp list) fc au (f_ask: Queries.ask) =
-      Logs.debug "=== combine_assign of function %s ===" f.svar.vname;
+    Logs.debug "=== combine_assign of function %s ===" f.svar.vname;
     man.local
-    
+
 
 end
