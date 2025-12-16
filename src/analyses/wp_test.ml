@@ -16,8 +16,8 @@ struct
 
   let vars_from_lval l = 
     match l with
-    | Var v, _ -> Some v (* some  variable*)
-    | Mem _, _ -> None (*do not know what to do here yet*)
+    | Var v, NoOffset when isIntegralType v.vtype && not (v.vglob || v.vaddrof) -> Some v (* local integer variable whose address is never taken *)
+    | _, _ -> None (*do not know what to do here yet*)
 
   let vars_from_expr (e: exp) : D.t=
     let rec aux acc e =
@@ -43,14 +43,14 @@ struct
 
 
   let assign man (lval:lval) (rval:exp) =
-    let () =
+    (* let () =
       Logs.debug "=== man (analysis manager) info ===";
       Logs.debug "  lval: %a" CilType.Lval.pretty lval;
       Logs.debug "  rval: %a" CilType.Exp.pretty rval;
       Logs.debug "  local state: %a" D.pretty man.local;
       Logs.debug "  local is_top: %b" (D.is_top man.local);
       Logs.debug "  local is_bot: %b" (D.is_bot man.local);
-    in
+    in *)
 
     let v = vars_from_lval lval in
 
@@ -73,10 +73,19 @@ struct
 
   (* TODO *)
   let enter man (lval: lval option) (f:fundec) (args:exp list) =
-    [man.local, man.local]
+    Logs.debug "=== enter function %s ===" f.svar.vname;
+    
+    [man.local, D.bot()]
 
   (* TODO *)
   let combine_env man (lval:lval option) fexp (f:fundec) (args:exp list) fc au (f_ask: Queries.ask) =
-    au
+    Logs.debug "=== combine_env of function %s ===" f.svar.vname;
+    
+    D.join man.local au 
+  
+  let combine_assign man (lval:lval option) fexp (f:fundec) (args:exp list) fc au (f_ask: Queries.ask) =
+      Logs.debug "=== combine_assign of function %s ===" f.svar.vname;
+    man.local
+    
 
 end

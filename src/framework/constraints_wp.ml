@@ -143,7 +143,6 @@ struct
   let tf_assign var edge prev_node lv e getl sidel demandl getg sideg d =
     let man, r, spawns = common_man var edge prev_node d getl sidel demandl getg sideg in
     let d = S.assign man lv e in (* Force transfer function to be evaluated before dereferencing in common_join argument. *)
-    Logs.debug "######### there was an assign";
     common_join man d !r !spawns
 
   let tf_vdecl var edge prev_node v getl sidel demandl getg sideg d =
@@ -187,10 +186,15 @@ struct
     let d = S.branch man e tv in (* Force transfer function to be evaluated before dereferencing in common_join argument. *)
     common_join man d !r !spawns
 
+  (*TODO: THIS HAS TO BE BACKWARDS*)
   let tf_normal_call man lv e (f:fundec) args getl sidel demandl getg sideg =
     let combine (cd, fc, fd) =
       if M.tracing then M.traceli "combine" "local: %a" S.D.pretty cd;
       if M.tracing then M.trace "combine" "function: %a" S.D.pretty fd;
+
+      Logs.debug "combine: local: %a" S.D.pretty cd;
+      Logs.debug "combine: function: %a" S.D.pretty fd;
+
       let rec cd_man =
         { man with
           ask = (fun (type a) (q: a Queries.t) -> S.query cd_man q);
@@ -248,12 +252,14 @@ struct
     (* let paths = List.filter (fun (c,fc,v) -> not (D.is_bot v)) paths in *)
     let paths = List.map (Tuple3.map2 Option.some) paths in
     if M.tracing then M.traceli "combine" "combining";
+    Logs.debug  "combining";
     let paths = List.map combine paths in
     let r = List.fold_left D.join (D.bot ()) paths in
     if M.tracing then M.traceu "combine" "combined: %a" S.D.pretty r;
+    Logs.debug "combined: %a" S.D.pretty r;
     r
 
-
+  (*TODO: HERE AS WELL*)
   let rec tf_proc var edge prev_node lv e args getl sidel demandl getg sideg d =
     let tf_special_call man f =
       let once once_control init_routine =
@@ -391,7 +397,6 @@ struct
       )
 
   let system (v,c) =
-
     let wrap (v,c) = 
       match v with
       | FunctionEntry _ ->
@@ -400,10 +405,8 @@ struct
           let xs = List.map tf' (Cfg.next v) in
           List.fold_left S.D.join (S.D.bot ()) xs
         in
-        Logs.debug "## Function Entry" ;
         Some tf
       | Function _ ->
-        Logs.debug "## Function call?" ;
         None
       | _ ->
         let tf getl sidel demandl getg sideg =
@@ -411,180 +414,26 @@ struct
           let xs = List.map tf' (Cfg.next v) in
           List.fold_left S.D.join (S.D.bot ()) xs
         in
-        Logs.debug "## Not Function Entry. Number of nexts: %d" (List.length (Cfg.next v)) ;
-        Logs.debug "##                     Number of prevs: %d" (List.length (Cfg.prev v)) ;
+       
         Some tf
 
     in
 
-    Logs.debug "# Creating transfer function for node %s" (Node.show v);
+    Logs.debug "# Creating transfer function for %s" (Node.show v);
+    Logs.debug "  Number of nexts: %d" (List.length (Cfg.next v)) ;
+    Logs.debug "  Number of prevs: %d" (List.length (Cfg.prev v)) ;
     wrap (v,c)
 
-
+  
+  (* what does this do? *)
   let iter_vars getl getg vq fl fg =
-    (* vars for Spec *)
-    let rec man =
-      { ask    = (fun (type a) (q: a Queries.t) -> S.query man q)
-      ; emit   = (fun _ -> failwith "Cannot \"emit\" in query context.")
-      ; node   = MyCFG.dummy_node (* TODO maybe ask should take a node (which could be used here) instead of a location *)
-      ; prev_node = MyCFG.dummy_node
-      ; control_context = (fun () -> man_failwith "No context in query context.")
-      ; context = (fun () -> man_failwith "No context in query context.")
-      ; edge    = MyCFG.Skip
-      ; local  = S.startstate Cil.dummyFunDec.svar (* bot and top both silently raise and catch Deadcode in DeadcodeLifter *)
-      ; global = (fun g -> G.spec (getg (GVar.spec g)))
-      ; spawn  = (fun ?(multiple=false) v d    -> failwith "Cannot \"spawn\" in query context.")
-      ; split  = (fun d es   -> failwith "Cannot \"split\" in query context.")
-      ; sideg  = (fun v g    -> failwith "Cannot \"split\" in query context.")
-      }
-    in
-    let f v = fg (GVar.spec (Obj.obj v)) in
-    S.query man (IterSysVars (vq, f));
-
-    (* node vars for locals *)
-    match vq with
-    | Node {node; fundec} ->
-      let fd = Option.default_delayed (fun () -> Node.find_fundec node) fundec in
-      let cs = G.contexts (getg (GVar.contexts fd)) in
-      G.CSet.iter (fun c ->
-          fl (node, c)
-        ) cs
-    | _ ->
-      ();
       failwith "iter_vars not implemented in WP"
 
 
   let sys_change getl getg =
-    (*
-    let open CompareCIL in
-
-    let c = match I.increment with
-      | Some {changes; _} -> changes
-      | None -> empty_change_info ()
-    in
-    List.(Logs.info "change_info = { unchanged = %d; changed = %d (with unchangedHeader = %d); added = %d; removed = %d }" (length c.unchanged) (length c.changed) (BatList.count_matching (fun c -> c.unchangedHeader) c.changed) (length c.added) (length c.removed));
-
-    let changed_funs = List.filter_map (function
-        | {old = {d ef = Some (Fun f); _}; diff = None; _} ->
-          Logs.info "Completely changed function: %s" f.svar.vname;
-          Some f
-        | _ -> None
-      ) c.changed
-    in
-    let part_changed_funs = List.filter_map (function
-        | {old = {def = Some (Fun f); _}; diff = Some nd; _} ->
-          Logs.info "Partially changed function: %s" f.svar.vname;
-          Some (f, nd.primObsoleteNodes, nd.unchangedNodes)
-        | _ -> None
-      ) c.changed
-    in
-    let removed_funs = List.filter_map (function
-        | {def = Some (Fun f); _} ->
-          Logs.info "Removed function: %s" f.svar.vname;
-          Some f
-        | _ -> None
-      ) c.removed
-    in
-
-    let module HM = Hashtbl.Make (Var2 (LVar) (GVar)) in
-
-    let mark_node hm f node =
-      iter_vars getl getg (Node {node; fundec = Some f}) (fun v ->
-          HM.replace hm (`L v) ()
-        ) (fun v ->
-          HM.replace hm (`G v) ()
-        )
-    in
-
-    let reluctant = GobConfig.get_bool "incremental.reluctant.enabled" in
-    let reanalyze_entry f =
-      (* destabilize the entry points of a changed function when reluctant is off,
-         or the function is to be force-reanalyzed  *)
-      (not reluctant) || CompareCIL.VarinfoSet.mem f.svar c.exclude_from_rel_destab
-    in
-    let obsolete_ret = HM.create 103 in
-    let obsolete_entry = HM.create 103 in
-    let obsolete_prim = HM.create 103 in
-
-    (* When reluctant is on:
-       Only add function entry nodes to obsolete_entry if they are in force-reanalyze *)
-    List.iter (fun f ->
-        if reanalyze_entry f then
-          (* collect function entry for eager destabilization *)
-          mark_node obsolete_entry f (FunctionEntry f)
-        else
-          (* collect function return for reluctant analysis *)
-          mark_node obsolete_ret f (Function f)
-      ) changed_funs;
-    (* Primary changed unknowns from partially changed functions need only to be collected for eager destabilization when reluctant is off *)
-    (* The return nodes of partially changed functions are collected in obsolete_ret for reluctant analysis *)
-    (* We utilize that force-reanalyzed functions are always considered as completely changed (and not partially changed) *)
-    List.iter (fun (f, pn, _) ->
-        if not reluctant then (
-          List.iter (fun n ->
-              mark_node obsolete_prim f n
-            ) pn
-        )
-        else
-          mark_node obsolete_ret f (Function f)
-      ) part_changed_funs;
-
-    let obsolete = Seq.append (HM.to_seq_keys obsolete_entry) (HM.to_seq_keys obsolete_prim) |> List.of_seq in
-    let reluctant = HM.to_seq_keys obsolete_ret |> List.of_seq in
-
-    let marked_for_deletion = HM.create 103 in
-
-    let dummy_pseudo_return_node f =
-      (* not the same as in CFG, but compares equal because of sid *)
-      Node.Statement ({Cil.dummyStmt with sid = Cilfacade.get_pseudo_return_id f})
-    in
-    let add_nodes_of_fun (functions: fundec list) (withEntry: fundec -> bool) =
-      let add_stmts (f: fundec) =
-        List.iter (fun s ->
-            mark_node marked_for_deletion f (Statement s)
-          ) f.sallstmts
-      in
-      List.iter (fun f ->
-          if withEntry f then
-            mark_node marked_for_deletion f (FunctionEntry f);
-          mark_node marked_for_deletion f (Function f);
-          add_stmts f;
-          mark_node marked_for_deletion f (dummy_pseudo_return_node f)
-        ) functions;
-    in
-
-    add_nodes_of_fun changed_funs reanalyze_entry;
-    add_nodes_of_fun removed_funs (fun _ -> true);
-    (* it is necessary to remove all unknowns for changed pseudo-returns because they have static ids *)
-    let add_pseudo_return f un =
-      let pseudo = dummy_pseudo_return_node f in
-      if not (List.exists (Node.equal pseudo % fst) un) then
-        mark_node marked_for_deletion f (dummy_pseudo_return_node f)
-    in
-    List.iter (fun (f,_,un) ->
-        mark_node marked_for_deletion f (Function f);
-        add_pseudo_return f un
-      ) part_changed_funs;
-
-    let delete = HM.to_seq_keys marked_for_deletion |> List.of_seq in
-
-    let restart = match I.increment with
-      | Some data ->
-        let restart = ref [] in
-        List.iter (fun g ->
-            iter_vars getl getg g (fun v ->
-                restart := `L v :: !restart
-              ) (fun v ->
-                restart := `G v :: !restart
-              )
-          ) data.restarting;
-        !restart
-      | None -> []
-    in 
-
-    {obsolete; delete; reluctant; restart}*)
     failwith "sys_change not implemented in WP"
 
+  (*What does this do?*)
   let postmortem = function
     | FunctionEntry fd, c -> [(Function fd, c)]
     | _ -> []

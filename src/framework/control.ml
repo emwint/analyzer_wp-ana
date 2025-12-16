@@ -773,8 +773,8 @@ struct
   (* The solver *)
   module PostSolverArg =
   struct
-    let should_prune = false
-    let should_verify = false (*get_bool "verify"*)
+    let should_prune = true
+    let should_verify = true (*get_bool "verify"*)
     let should_warn = get_string "warn_at" <> "never"
     let should_save_run =
       (* copied from solve_and_postprocess *)
@@ -795,13 +795,6 @@ struct
   module ResultOutput = AnalysisResultOutput.Make (Result)
 
   module Query = ResultQuery.Query (SpecSys)
-
-
-  let print_one f (module S : Printable.S) x : unit =
-    BatPrintf.fprintf f "<analysis name=\"%s\">\n" (Spec.name ());
-    S.printXml f (Obj.obj x);
-    BatPrintf.fprintf f "</analysis>\n"
-
 
   (* print out information about dead code *)
   let print_dead_code (xs:Result.t) uncalled_fn_loc =
@@ -934,13 +927,25 @@ struct
     LHT.iter add_local_var h;
     res
 
-  (** The main function to preform the selected analyses. *)
+  (** [analyze file startfuns exitfuns otherfuns] is the main function to preform the selected analyses.*)
   let analyze (file: file) (startfuns, exitfuns, otherfuns: Analyses.fundecs) =
     let module FileCfg: FileCfg =
     struct
       let file = file
       module Cfg = Cfg
     end
+    in
+
+    let () =
+      let log_fun_list name funs =
+        let fun_names = List.map (fun f -> f.svar.vname) funs in
+        Logs.debug "%s functions: %s" name (String.concat ", " fun_names)
+      in
+      Logs.debug "================= Analysis Setup ================";
+      log_fun_list "Start" startfuns;
+      log_fun_list "Exit" exitfuns;
+      log_fun_list "Other" otherfuns;
+      Logs.debug "================================================";
     in
 
     AnalysisState.should_warn := false; (* reset for server mode *)
@@ -1191,7 +1196,7 @@ struct
         List.map (fun (n,e) -> (MyCFG.Function n, Spec.context (man e) n e)) startvars
     in
 
-    (* let entrystates = List.map (fun (n,e) -> (MyCFG.FunctionEntry n, Spec.context (man e) n e), e) startvars in  *)
+    (* let entrystates = List.clearmap (fun (n,e) -> (MyCFG.FunctionEntry n, Spec.context (man e) n e), e) startvars in  *)
     let entrystates = List.map (fun (n,e) -> (MyCFG.Function n, Spec.context (man e) n e), e) startvars in
     let entrystates_global = GHT.to_list gh in
 
@@ -1249,7 +1254,7 @@ struct
           List.iteri (fun i (node, state) ->
               Logs.debug "StartVar (no apostrophe) %d:" (i + 1);
               Logs.debug "  Node: %a" CilType.Fundec.pretty node;
-              Logs.debug "  State: %a" Spec.D.pretty state;
+              Logs.debug "  State: (of type EQSys.D.t) %a" Spec.D.pretty state;
             ) startvars;
 
           Logs.debug "=== End Analysis Inputs ==="
@@ -1497,8 +1502,6 @@ struct
 
     Messages.finalize ();
     (* Timing.wrap "result output" (ResultOutput.output (lazy local_xml) liveness gh make_global_fast_xml) (module FileCfg); *)
-
-    (*TODO: Script adding these results to the already existing node xml files*)
 
     (*Iterating through elements of lh and Logging the contents*)
     let log_lh_contents lh =
@@ -1958,7 +1961,7 @@ struct
 
 end
 
-(* This function was originally a part of the [AnalyzeCFG] module, but
+(** This function was originally a part of the [AnalyzeCFG] module, but
    now that [AnalyzeCFG] takes [Spec] as a functor parameter,
    [analyze_loop] cannot reside in it anymore since each invocation of
    [get_spec] in the loop might/should return a different module, and we
