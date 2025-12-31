@@ -14,7 +14,7 @@ struct
   let startstate v = D.empty()
   let exitstate v = D.empty()
 
-  let vars_from_lval l = 
+  let vars_from_lval (l: lval) = 
     match l with
     | Var v, NoOffset when isIntegralType v.vtype && not (v.vglob || v.vaddrof) -> Some v (* local integer variable whose address is never taken *)
     | _, _ -> None (*do not know what to do here yet*)
@@ -73,19 +73,40 @@ struct
 
   (* TODO *)
   let enter man (lval: lval option) (f:fundec) (args:exp list) =
-    Logs.debug "=== enter function %s ===" f.svar.vname;
+    Logs.debug "=== enter function %s with args %s ===" f.svar.vname 
+      (String.concat ", " (List.map (CilType.Exp.show) args));
 
-    [man.local, D.bot()]
+    let vars =
+      match lval with 
+      | None -> man.local
+      | Some lv -> man.local (*i have to check for every arg ... no wait... I do not care about the args here, i care about those at the combine!!!!*)
+)
+in
 
-  (* TODO *)
-  let combine_env man (lval:lval option) fexp (f:fundec) (args:exp list) fc au (f_ask: Queries.ask) =
-    Logs.debug "=== combine_env of function %s ===" f.svar.vname;
+[man.local, vars]
 
-    D.join man.local au 
+(* TODO *)
+let combine_env man (lval:lval option) fexp (f:fundec) (args:exp list) fc au (f_ask: Queries.ask) =
+  Logs.debug "=== combine_env of function %s ===" f.svar.vname;
+  (*here I would just add relevant global vars, which is nothing currently nothing. so i would actually *)
+  D.join man.local au 
 
-  let combine_assign man (lval:lval option) fexp (f:fundec) (args:exp list) fc au (f_ask: Queries.ask) =
-    Logs.debug "=== combine_assign of function %s ===" f.svar.vname;
-    man.local
+let combine_assign man (lval:lval option) fexp (f:fundec) (args:exp list) fc au (f_ask: Queries.ask) =
+  Logs.debug "=== combine_assign of function %s ===" f.svar.vname;
+  (*here I add the relevant args. to get the relevant args I have to query the start point of f.. *)
+  man.local
 
+
+
+(** A transfer function which handles the return statement, i.e.,
+    "return exp" or "return" in the passed function (fundec) *)
+let return man (exp: exp option) (f:fundec) : D.t =
+  let return_val_is_important = (not (D.is_bot man.local)) || (String.equal f.svar.vname "main") in (*this does not take globals int account, only checks for "temp"*)
+
+  match exp with
+  | None -> D.empty()
+  | Some e -> if return_val_is_important
+    then D.join (D.empty()) (vars_from_expr e)
+    else D.empty();
 
 end

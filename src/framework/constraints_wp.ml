@@ -242,12 +242,19 @@ struct
         ) (S.D.bot ()) (S.paths_as_set fd_man)
       in
       if M.tracing then M.traceu "combine" "combined local: %a" S.D.pretty r;
+      Logs.debug "combined local: %a" S.D.pretty r;
       r
     in
-    let paths = S.enter man lv f args in
+    let paths = 
+      Logs.debug "manager info at call to %a" Node.pretty man.node;
+      S.enter man lv f args in
     let paths = List.map (fun (c,v) -> (c, S.context man f v, v)) paths in
-    List.iter (fun (c,fc,v) -> if not (S.D.is_bot v) then sidel (FunctionEntry f, fc) v) paths;
-    let paths = List.map (fun (c,fc,v) -> (c, fc, if S.D.is_bot v then v else getl (Function f, fc))) paths in
+
+    (* List.iter (fun (c,fc,v) -> if not (S.D.is_bot v) then sidel (FunctionEntry f, fc) v) paths; *)
+    List.iter (fun (c,fc,v) -> if not (S.D.is_bot v) then sidel (Function f, fc) v) paths;
+    (* let paths = List.map (fun (c,fc,v) -> (c, fc, if S.D.is_bot v then v else getl (Function f, fc))) paths; *)
+    let paths = List.map (fun (c,fc,v) -> (c, fc, if S.D.is_bot v then v else getl (FunctionEntry f, fc))) paths in
+
     (* Don't filter bot paths, otherwise LongjmpLifter is not called. *)
     (* let paths = List.filter (fun (c,fc,v) -> not (D.is_bot v)) paths in *)
     let paths = List.map (Tuple3.map2 Option.some) paths in
