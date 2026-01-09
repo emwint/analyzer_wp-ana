@@ -211,7 +211,8 @@ struct
           { man with
             ask = (fun (type a) (q: a Queries.t) -> S.query sync_man q);
             local = fd;
-            prev_node = Function f;
+            (*prev_node = Function f*)
+            prev_node = FunctionEntry f;
           }
         in
         (* TODO: more accurate man? *)
@@ -253,6 +254,7 @@ struct
     (* List.iter (fun (c,fc,v) -> if not (S.D.is_bot v) then sidel (FunctionEntry f, fc) v) paths; *)
     List.iter (fun (c,fc,v) -> if not (S.D.is_bot v) then sidel (Function f, fc) v) paths;
     (* let paths = List.map (fun (c,fc,v) -> (c, fc, if S.D.is_bot v then v else getl (Function f, fc))) paths; *)
+    (* *)
     let paths = List.map (fun (c,fc,v) -> (c, fc, if S.D.is_bot v then v else getl (FunctionEntry f, fc))) paths in
 
     (* Don't filter bot paths, otherwise LongjmpLifter is not called. *)
@@ -426,9 +428,9 @@ struct
 
     in
 
-    Logs.debug "# Creating transfer function for %s" (Node.show v);
-    Logs.debug "  Number of nexts: %d" (List.length (Cfg.next v)) ;
-    Logs.debug "  Number of prevs: %d" (List.length (Cfg.prev v)) ;
+    (* Logs.debug "# Creating transfer function for %s" (Node.show v);
+       Logs.debug "  Number of nexts: %d" (List.length (Cfg.next v)) ;
+       Logs.debug "  Number of prevs: %d" (List.length (Cfg.prev v)) ; *)
     wrap (v,c)
 
 

@@ -1,16 +1,24 @@
  #include <stdlib.h>
 
-int f(int x) {
+int f(int x, int y) {
     int i = 0;
 
     i = i + 1;
-    return  i + x;
+    
+    if (x > 0) {
+        i = i + 2;
+        return i;
+    } else {
+        i = i + 3;
+        return i + x;
+    }
 }
 
 
 int main() {
     int a = 0;
-    int b = f(a);
+    int c = 3;
+    int b = f(a, c);
     return b;
 }
 
