@@ -1190,7 +1190,7 @@ struct
     in
     let startvars' =
       (* if get_bool "exp.forward" then *)
-      if true then 
+      if true then  (*does this deside which variables I query?*)
         List.map (fun (n,e) -> (MyCFG.FunctionEntry n, Spec.context (man e) n e)) startvars
       else
         List.map (fun (n,e) -> (MyCFG.Function n, Spec.context (man e) n e)) startvars
@@ -1204,6 +1204,7 @@ struct
 
     let solve_and_postprocess () =
       let lh, gh =
+        (*Solver data??*)
         let solver_data =
           match Inc.increment with
           | Some {solver_data; server; _} ->
@@ -1213,9 +1214,10 @@ struct
               Some (Slvr.relift_marshal solver_data)
             else
               Some solver_data
-          | None -> None
+          | None -> None 
         in
         Logs.debug "%s" ("Solving the constraint system with " ^ get_string "solver" ^ ". Solver statistics are shown every " ^ string_of_int (get_int "dbg.solver-stats-interval") ^ "s or by signal " ^ get_string "dbg.solver-signal" ^ ".");
+
 
         (*######################### START OF ACTUAL SOLVING ##########################*)
 

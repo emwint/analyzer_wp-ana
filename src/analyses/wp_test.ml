@@ -1,11 +1,21 @@
 open GoblintCil
 open Analyses
 
+
 module Spec : Analyses.MCPSpec =
 struct
   let name () = "wp_test"
 
-  include Analyses.IdentityUnitContextsSpec
+  include Analyses.IdentitySpec
+
+  (*## context ##*)
+  (*Idea: make context type passsable, so add parameter.*)
+  module C = Printable.Unit
+
+  let context man _ _ = ()
+  let startcontext () = ()
+
+  (*## end of context ##*)
 
 
   module LiveVariableSet =  SetDomain.ToppedSet (Basetype.Variables) (struct let topname = "All variables" end)
@@ -46,7 +56,7 @@ struct
     (* let () =
        Logs.debug "=== man (analysis manager) info ===";
        Logs.debug "  lval: %a" CilType.Lval.pretty lval;
-       Logs.debug "  rval: %a" CilType.Exp.pretty rval;
+       Logs.debug "  rval: %a" Cil Type.Exp.pretty rval;
        Logs.debug "  local state: %a" D.pretty man.local;
        Logs.debug "  local is_top: %b" (D.is_top man.local);
        Logs.debug "  local is_bot: %b" (D.is_bot man.local);
@@ -119,16 +129,17 @@ struct
       let v = vars_from_lval lval in
 
       match v with
-      | None -> D.join acc (vars_from_expr exp) (*if I do not know what the value is assigned to, then all RHS-Variables might be relevant*)
+      | None -> acc  (*D.join acc (vars_from_expr exp) if I do not know what the value is assigned to, then all RHS-Variables might be relevant *)
       | Some v -> 
         let l = (D.diff acc (D.singleton v)) in
-        if D.mem v acc then D.join l (vars_from_expr exp)
-        else l
+        (* if D.mem v acc then D.join l (vars_from_expr exp)
+           else l *)
+        l
     in
 
     match lval with 
     | Some lval -> List.fold_right (fun exp acc -> simple_assign lval exp acc) args man.local
-    | None -> man.local
+    | _ -> man.local
 
 
 

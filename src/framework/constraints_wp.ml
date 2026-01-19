@@ -249,6 +249,7 @@ struct
     let paths = 
       Logs.debug "manager info at call to %a" Node.pretty man.node;
       S.enter man lv f args in
+    (* Wollen eig vorwärts-kontext benutzen *)
     let paths = List.map (fun (c,v) -> (c, S.context man f v, v)) paths in
 
     (* List.iter (fun (c,fc,v) -> if not (S.D.is_bot v) then sidel (FunctionEntry f, fc) v) paths; *)
@@ -308,7 +309,8 @@ struct
       | _ ->
         (* Depends on base for query. *)
         let ad = man.ask (Queries.EvalFunvar e) in
-        Queries.AD.to_var_may ad (* TODO: don't convert, handle UnknownPtr below *)
+        Queries.AD.to_var_may ad (* TODO: don't convert, handle UnknownPtr below *) 
+        (*PROBLEM: Pointer. Brauche Ergebnisse der anderen Analysen*)
     in
     let one_function f =
       match Cil.unrollType f.vtype with
