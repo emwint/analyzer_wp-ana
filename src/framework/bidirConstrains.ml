@@ -88,9 +88,9 @@ struct
       | `G_backw a -> GV_backw.is_write_only a
   end
 
-  module G = GVarG (Lattice.Lift2(S_forw.G)(S_backw.G)) (S_forw.C)
   module G_forw = GVarG (S_forw.G) (S_forw.C)
   module G_backw = GVarG (S_backw.G) (S_forw.C)
+  module G = GVarG (Lattice.Lift2(S_forw.G)(S_backw.G)) (S_forw.C)
 
   module Forward = Constraints_wp.FromSpec (S_forw) (Cfg)
   module CfgBackward = struct let prev = Cfg.prev end
