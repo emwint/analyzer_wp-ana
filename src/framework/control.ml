@@ -1642,7 +1642,6 @@ struct
 end
 
 module AnalyzeCFG_3 (Cfg:CfgBidirSkip) (Spec_forw:Spec) (Spec_backw: Spec with type C.t = Spec_forw.C.t ) (Inc:Increment) =
-
 struct
 
   (* The Equation system *)
@@ -1679,7 +1678,6 @@ struct
 
   (* not having a Query module is problematic!*)
   (* module Query = ResultQuery.Query (SpecSys) *)
-
 
   (** [analyze file startfuns exitfuns otherfuns] is the main function to preform the selected analyses.*)
   let analyze (file: file) (startfuns, exitfuns, otherfuns: Analyses.fundecs) =
@@ -1731,7 +1729,7 @@ struct
         | `Lifted2 _ -> failwith "Unexpected backward global state"
       in
 
-      (** This function nalyzes cil's global-inits function to get a starting state *)
+      (** This function nalyzelhs cil's global-inits function to get a starting state *)
       let do_global_inits_forw (file: file) : Spec_forw.D.t * fundec list =
 
         let do_extern_inits_forw man (file: file) : Spec_forw.D.t =
@@ -1894,7 +1892,178 @@ struct
       calculate_startvars_forw ()
     in
 
-    let do_backward_inits () = () in
+    let do_backward_inits () = 
+
+      let sideg_backw v d = sideg (`G_backw (v)) ((`Lifted2 d)) in
+      let getg_backw v =
+        match EQSys.G.spec (getg (`G_backw v)) with
+        | `Lifted1 _ -> failwith "Unexpected backward global state"
+        | `Bot -> `Bot
+        | `Top -> `Top
+        | `Lifted2 g -> G_backw.create_spec g
+      in
+
+      (** This function nalyzelhs cil's global-inits function to get a starting state *)
+      let do_global_inits_backw (file: file) : Spec_backw.D.t * fundec list =
+
+        let do_extern_inits_backw man (file: file) : Spec_backw.D.t =
+          let module VS = Set.Make (Basetype.Variables) in
+          let add_glob s = function
+            | GVar (v,_,_) -> VS.add v s
+            | _            -> s
+          in
+          let vars = foldGlobals file add_glob VS.empty in
+          let set_bad v st =
+            Spec_backw.assign {man with local = st} (var v) MyCFG.unknown_exp
+          in
+          let is_std = function
+            | {vname = ("__tzname" | "__daylight" | "__timezone"); _} (* unix time.h *)
+            | {vname = ("tzname" | "daylight" | "timezone"); _} (* unix time.h *)
+            | {vname = "getdate_err"; _} (* unix time.h, but somehow always in MacOS even without include *)
+            | {vname = ("stdin" | "stdout" | "stderr"); _} (* standard stdio.h *)
+            | {vname = ("optarg" | "optind" | "opterr" | "optopt" ); _} (* unix unistd.h *)
+            | {vname = ("__environ"); _} -> (* Linux Standard Base Core Specification *)
+              true
+            | _ -> false
+          in
+          let add_externs s = function
+            | GVarDecl (v,_) when not (VS.mem v vars || isFunctionType v.vtype) && not (get_bool "exp.hide-std-globals" && is_std v) -> set_bad v s
+            | _ -> s
+          in
+          foldGlobals file add_externs (Spec_backw.startstate MyCFG.dummy_func.svar)
+        in
+
+        let man =
+          { ask     = (fun (type a) (q: a Queries.t) -> Queries.Result.top q)
+          ; emit   = (fun _ -> failwith "Cannot \"emit\" in global initializer context.")
+          ; node    = MyCFG.dummy_node
+          ; prev_node = MyCFG.dummy_node
+          ; control_context = (fun () -> man_failwith "Global initializers have no context.")
+          ; context = (fun () -> man_failwith "Global initializers have no context.")
+          ; edge    = MyCFG.Skip
+          ; local   = Spec_backw.D.top ()
+          ; global  = (fun _ -> Spec_backw.G.bot ())
+          ; spawn   = (fun ?(multiple=false) _ -> failwith "Global initializers should never spawn threads. What is going on?")
+          ; split   = (fun _ -> failwith "Global initializers trying to split paths.")
+          ; sideg   = (fun g d -> sideg_backw (GV_backw.spec g) (G_backw.create_spec d))
+          }
+        in
+
+        let edges = CfgTools.getGlobalInits file in
+        Logs.debug "Executing %d assigns." (List.length edges);
+        let funs = ref [] in
+
+        let transfer_func (st : Spec_backw.D.t) (loc, edge) : Spec_backw.D.t =
+          match edge with
+          | MyCFG.Entry func        -> Spec_backw.body {man with local = st} func
+          | MyCFG.Assign (lval,exp) ->
+            begin match lval, exp with
+              | (Var v,o), (AddrOf (Var f,NoOffset))
+                when v.vstorage <> Static && isFunctionType f.vtype ->
+                (try funs := Cilfacade.find_varinfo_fundec f :: !funs with Not_found -> ())
+              | _ -> ()
+            end;
+            let res = Spec_backw.assign {man with local = st} lval exp in
+            (* Needed for privatizations (e.g. None) that do not side immediately *)
+            let res' = Spec_backw.sync {man with local = res} `Normal in
+            res'
+          | _                       -> failwith "Unsupported global initializer edge"
+        in
+
+        let with_externs = do_extern_inits_backw man file in
+        let result : Spec_backw.D.t = List.fold_left transfer_func with_externs edges in
+        result, !funs
+      in
+
+      let startstate, _ = do_global_inits_backw file in
+
+
+      (** calculate startvars *)
+      let calculate_startvars_backw ()  =
+
+        let enter_with st fd =
+          let st = st fd.svar in
+          let man =
+            { ask     = (fun (type a) (q: a Queries.t) -> Queries.Result.top q)
+            ; emit   = (fun _ -> failwith "Cannot \"emit\" in enter_with context.")
+            ; node    = MyCFG.dummy_node
+            ; prev_node = MyCFG.dummy_node
+            ; control_context = (fun () -> man_failwith "enter_with has no control_context.")
+            ; context = Spec_backw.startcontext
+            ; edge    = MyCFG.Skip
+            ; local   = st
+            ; global  = (fun g -> G_backw.spec (getg_backw (GV_backw.spec g)))
+            ; spawn   = (fun ?(multiple=false) _ -> failwith "Bug1: Using enter_func for toplevel functions with 'otherstate'.")
+            ; split   = (fun _ -> failwith "Bug2: Using enter_func for toplevel functions with 'otherstate'.")
+            ; sideg   = (fun g d -> sideg_backw (GV_backw.spec g) (G_backw.create_spec (d)))
+            }
+          in
+          let args = List.map (fun x -> MyCFG.unknown_exp) fd.sformals in
+          let ents = Spec_backw.enter man None fd args in
+          List.map (fun (_,s) -> fd, s) ents
+        in
+
+        (try MyCFG.dummy_func.svar.vdecl <- (List.hd otherfuns).svar.vdecl with Failure _ -> ());
+
+        let startvars =
+          if startfuns = []
+          then [[MyCFG.dummy_func, startstate]]
+          else
+            let morph f = Spec_backw.morphstate f startstate in
+            List.map (enter_with morph) startfuns
+        in
+
+        let exitvars = List.map (enter_with Spec_backw.exitstate) exitfuns in
+        let otherstate st v =
+          let man =
+            { ask     = (fun (type a) (q: a Queries.t) -> Queries.Result.top q)
+            ; emit   = (fun _ -> failwith "Cannot \"emit\" in otherstate context.")
+            ; node    = MyCFG.dummy_node
+            ; prev_node = MyCFG.dummy_node
+            ; control_context = (fun () -> man_failwith "enter_func has no context.")
+            ; context = (fun () -> man_failwith "enter_func has no context.")
+            ; edge    = MyCFG.Skip
+            ; local   = st
+            ; global  = (fun g -> G_backw.spec (getg_backw (GV_backw.spec g)))
+            ; spawn   = (fun ?(multiple=false) _ -> failwith "Bug1: Using enter_func for toplevel functions with 'otherstate'.")
+            ; split   = (fun _ -> failwith "Bug2: Using enter_func for toplevel functions with 'otherstate'.")
+            ; sideg   = (fun g d -> sideg_backw  (GV_backw.spec g) (G_backw.create_spec (d)))
+            }
+          in
+          (* TODO: don't hd *)
+          List.hd (Spec_forw.threadenter man ~multiple:false None v [])
+          (* TODO: do threadspawn to mainfuns? *)
+        in
+        let prestartstate = Spec_backw.startstate MyCFG.dummy_func.svar in (* like in do_extern_inits *)
+        let othervars = List.map (enter_with (otherstate prestartstate)) otherfuns in
+        let startvars = List.concat (startvars @ exitvars @ othervars) in
+        if startvars = [] then
+          failwith "BUG: Empty set of start variables; may happen if enter_func of any analysis returns an empty list.";
+
+        AnalysisState.global_initialization := false;
+
+        let man e =
+          { ask     = (fun (type a) (q: a Queries.t) -> Queries.Result.top q)
+          ; emit   = (fun _ -> failwith "Cannot \"emit\" in enter_with context.")
+          ; node    = MyCFG.dummy_node
+          ; prev_node = MyCFG.dummy_node
+          ; control_context = (fun () -> man_failwith "enter_with has no control_context.")
+          ; context = Spec_backw.startcontext
+          ; edge    = MyCFG.Skip
+          ; local   = e
+          ; global  = (fun g -> G_backw.spec (getg_backw (GV_backw.spec g)))
+          ; spawn   = (fun ?(multiple=false) _ -> failwith "Bug1: Using enter_func for toplevel functions with 'otherstate'.")
+          ; split   = (fun _ -> failwith "Bug2: Using enter_func for toplevel functions with 'otherstate'.")
+          ; sideg   = (fun g d -> sideg_backw (GV_backw.spec g) (G_backw.create_spec d))
+          }
+        in
+        let startvars' = List.map (fun (n,e) -> (MyCFG.FunctionEntry n, Spec_backw.context (man e) n e)) startvars in
+        let entrystates = List.map (fun (n,e) -> (MyCFG.FunctionEntry n, Spec_backw.context (man e) n e), e) startvars in
+
+        startvars', entrystates
+      in
+
+      calculate_startvars_backw ()
 
     (** Combining the solver input calculation from the forwards and backwards part of the constrant system*)
     let calculate_solver_input () = 
@@ -1958,6 +2127,7 @@ struct
 
       let log_lh_contents lh =
         Logs.debug "=== LHT Contents ===";
+        Logs.debug "LHT size: %d" (LHT.length lh);
         let count = ref 0 in
 
         Logs.debug "--- Full entry details ---";
@@ -1966,8 +2136,16 @@ struct
             Logs.debug "Entry %d:" !count;
             Logs.debug "  Var: %a" EQSys.LVar.pretty_trace v;
             (match v with
-             | `L_forw (node, ctx)
+             | `L_forw (node, ctx) ->
+               (* Logs.debug "  Var kind: forward"; *)
+               Logs.debug "  Node: %a" Node.pretty_trace node;
+               (try
+                  Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
+                with e ->
+                  Logs.debug "  Context: ERROR - %s" (Printexc.to_string e)
+               );
              | `L_backw (node, ctx) ->
+               (* Logs.debug "  Var kind: backward"; *)
                Logs.debug "  Node: %a" Node.pretty_trace node;
                (try
                   Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
@@ -1975,18 +2153,42 @@ struct
                   Logs.debug "  Context: ERROR - %s" (Printexc.to_string e)
                )
             );
-
-            (* Test state pretty printing with exception handling *)
-            (try
-               Logs.debug "  State: %a" EQSys.D.pretty state
-             with e ->
-               Logs.debug "  State: ERROR - %s" (Printexc.to_string e)
+            (match state with 
+             | `Lifted1 d ->
+               (try
+                  (* Logs.debug "  State kind: Lifted1"; *)
+                  Logs.debug "  State: %a" Spec_forw.D.pretty d
+                with e ->
+                  Logs.debug "  State: ERROR - %s" (Printexc.to_string e)
+               );
+               (
+                  let base_id = MCPRegistry.find_id "base" in
+                  let d_list : (int * Obj.t) list = Obj.magic d in
+                  match List.assoc_opt base_id d_list with
+                  | Some base_state ->
+                    let module BaseDom = (val (MCPRegistry.find_spec base_id).dom : Lattice.S) in
+                    Logs.debug "  MCP base: %a" BaseDom.pretty (Obj.obj base_state)
+                  | None ->
+                    Logs.debug "  MCP base: <missing>"
+                );
+             | `Lifted2 d ->
+               (try
+                  (* Logs.debug "  State kind: Lifted2"; *)
+                  Logs.debug "  State: %a" Spec_backw.D.pretty d
+                with e ->
+                  Logs.debug "  State: ERROR - %s" (Printexc.to_string e)
+               );
+             | `Top ->
+               Logs.debug "  State kind: Top";
+             | `Bot ->
+               Logs.debug "  State kind: Bot"
             );
           ) lh;
         Logs.debug "Total entries in LHT: %d" !count;
         Logs.debug "=== End LHT Contents ==="
       in
       log_lh_contents lh;
+
     in
 
     solve();
@@ -2378,7 +2580,7 @@ let rec analyze_loop (module CFG : CfgBidirSkip) file fs change_info =
     let module A = AnalyzeCFG (CFG) (Spec) (struct let increment = change_info end) in
 
     let module DummyWPSPec = Wp_test.Spec in
-    let module B = AnalyzeCFG_2 (CFG) (DummyWPSPec) (struct let increment = change_info end) in
+    (* let module B = AnalyzeCFG_2 (CFG) (DummyWPSPec) (struct let increment = change_info end) in *)
 
     let module DummyWPSPec = ContextOverride (DummyWPSPec) (Spec.C)  in
     let module C = AnalyzeCFG_3 (CFG) (Spec) (DummyWPSPec) (struct let increment = change_info end) in 

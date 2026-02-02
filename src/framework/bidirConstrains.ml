@@ -92,9 +92,8 @@ struct
   module G_backw = GVarG (S_backw.G) (S_forw.C)
   module G = GVarG (Lattice.Lift2(S_forw.G)(S_backw.G)) (S_forw.C)
 
-  module Forward = Constraints_wp.FromSpec (S_forw) (Cfg)
-  module CfgBackward = struct let prev = Cfg.prev end
-  module Backward = Constraints.FromSpec (S_backw) (CfgBackward) (I)
+  module Forward = Constraints.FromSpec (S_forw) (Cfg) (I)
+  module Backward = Constraints_wp.FromSpec (S_backw) (Cfg) 
 
   let backw_lv_of_forw ((n,c): LV.t) : Backward.LVar.t = (n, Obj.magic c)
   let forw_lv_of_backw ((n,c): Backward.LVar.t) : LV.t = (n, Obj.magic c)
@@ -552,8 +551,8 @@ struct
 
   let system var =
     match var with
-    | `L_forw v -> None
-    (* Forward.system v
+    | `L_forw v ->
+      Forward.system v
        |> Option.map (fun tf getl sidel demandl getg sideg ->
         let getl' v = getl (`L_forw v) |> to_forw_d in
         let sidel' v d = sidel (`L_forw v) (of_forw_d d) in
@@ -561,7 +560,7 @@ struct
         let getg' v = getg (`G_forw v) |> to_forw_g in
         let sideg' v d = sideg (`G_forw v) (of_forw_g d) in
         tf getl' sidel' demandl' getg' sideg' |> of_forw_d
-       ) *)
+       )
     | `L_backw v ->
       system_backw v
       |> Option.map (fun tf getl sidel demandl getg sideg ->
