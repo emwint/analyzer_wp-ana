@@ -2065,133 +2065,133 @@ struct
 
       calculate_startvars_backw ()
 
-    (** Combining the solver input calculation from the forwards and backwards part of the constrant system*)
-    let calculate_solver_input () = 
-      let entrystates_global = GHT.to_list gh in
-      let startvars'_forw, entrystates_forw = do_forward_inits () in
+  (** Combining the solver input calculation from the forwards and backwards part of the constrant system*)
+  let calculate_solver_input () = 
+    let entrystates_global = GHT.to_list gh in
+    let startvars'_forw, entrystates_forw = do_forward_inits () in
 
-      (* Lifting the  forward satrtvars and entrystates to the constraint systems types*)
-      let startvars' = List.map (fun v -> `L_forw v) startvars'_forw in
-      let entrystates = List.map (fun (v, d) -> (`L_forw v, `Lifted1 d)) entrystates_forw in
+    (* Lifting the  forward satrtvars and entrystates to the constraint systems types*)
+    let startvars' = List.map (fun v -> `L_forw v) startvars'_forw in
+    let entrystates = List.map (fun (v, d) -> (`L_forw v, `Lifted1 d)) entrystates_forw in
 
-      startvars', entrystates, entrystates_global
+    startvars', entrystates, entrystates_global
+  in
+
+  let solve () = 
+    let solver_data = None in
+    let startvars', entrystates, entrystates_global = calculate_solver_input () in
+
+    let log_analysis_inputs () =
+      Logs.debug "=== Analysis Inputs ===";
+
+      (* Log entrystates *)
+      Logs.debug "--- Entry States (count: %d) ---" (List.length entrystates);
+      List.iteri (fun i (v, state) ->
+          Logs.debug "EntryState %d:" (i + 1);
+          Logs.debug "  Var: %a" EQSys.LVar.pretty_trace v;
+          (match v with
+           | `L_forw (node, ctx)
+           | `L_backw (node, ctx) ->
+             Logs.debug "  Node: %a" Node.pretty_trace node;
+             Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
+          );
+          Logs.debug "  State: %a" EQSys.D.pretty state;
+        ) entrystates;
+
+      (* Log entrystates_global *)
+      Logs.debug "--- Global Entry States (count: %d) ---" (List.length entrystates_global);
+      List.iteri (fun i (gvar, gstate) ->
+          Logs.debug "GlobalEntryState %d:" (i + 1);
+          Logs.debug "  GVar: %a" EQSys.GVar.pretty_trace gvar;
+          Logs.debug "  GState: %a" EQSys.G.pretty gstate;
+        ) entrystates_global;
+
+      (* Log startvars' *)
+      Logs.debug "--- Start Variables (count: %d) ---" (List.length startvars');
+      List.iteri (fun i v ->
+          Logs.debug "StartVar %d:" (i + 1);
+          Logs.debug "  Var: %a" EQSys.LVar.pretty_trace v;
+          (match v with
+           | `L_forw (node, ctx)
+           | `L_backw (node, ctx) ->
+             Logs.debug "  Node: %a" Node.pretty_trace node;
+             Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
+          )
+        ) startvars';
+
+      Logs.debug "=== End Analysis Inputs ==="
     in
+    log_analysis_inputs ();
 
-    let solve () = 
-      let solver_data = None in
-      let startvars', entrystates, entrystates_global = calculate_solver_input () in
+    let (lh, gh), solver_data = Timing.wrap "solving" (Slvr.solve entrystates entrystates_global startvars') solver_data in
 
-      let log_analysis_inputs () =
-        Logs.debug "=== Analysis Inputs ===";
+    let log_lh_contents lh =
+      Logs.debug "=== LHT Contents ===";
+      Logs.debug "LHT size: %d" (LHT.length lh);
+      let count = ref 0 in
 
-        (* Log entrystates *)
-        Logs.debug "--- Entry States (count: %d) ---" (List.length entrystates);
-        List.iteri (fun i (v, state) ->
-            Logs.debug "EntryState %d:" (i + 1);
-            Logs.debug "  Var: %a" EQSys.LVar.pretty_trace v;
-            (match v with
-             | `L_forw (node, ctx)
-             | `L_backw (node, ctx) ->
-               Logs.debug "  Node: %a" Node.pretty_trace node;
-               Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
-            );
-            Logs.debug "  State: %a" EQSys.D.pretty state;
-          ) entrystates;
-
-        (* Log entrystates_global *)
-        Logs.debug "--- Global Entry States (count: %d) ---" (List.length entrystates_global);
-        List.iteri (fun i (gvar, gstate) ->
-            Logs.debug "GlobalEntryState %d:" (i + 1);
-            Logs.debug "  GVar: %a" EQSys.GVar.pretty_trace gvar;
-            Logs.debug "  GState: %a" EQSys.G.pretty gstate;
-          ) entrystates_global;
-
-        (* Log startvars' *)
-        Logs.debug "--- Start Variables (count: %d) ---" (List.length startvars');
-        List.iteri (fun i v ->
-            Logs.debug "StartVar %d:" (i + 1);
-            Logs.debug "  Var: %a" EQSys.LVar.pretty_trace v;
-            (match v with
-             | `L_forw (node, ctx)
-             | `L_backw (node, ctx) ->
-               Logs.debug "  Node: %a" Node.pretty_trace node;
-               Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
-            )
-          ) startvars';
-
-        Logs.debug "=== End Analysis Inputs ==="
-      in
-      log_analysis_inputs ();
-
-      let (lh, gh), solver_data = Timing.wrap "solving" (Slvr.solve entrystates entrystates_global startvars') solver_data in
-
-      let log_lh_contents lh =
-        Logs.debug "=== LHT Contents ===";
-        Logs.debug "LHT size: %d" (LHT.length lh);
-        let count = ref 0 in
-
-        Logs.debug "--- Full entry details ---";
-        LHT.iter (fun v state ->
-            incr count;
-            Logs.debug "Entry %d:" !count;
-            Logs.debug "  Var: %a" EQSys.LVar.pretty_trace v;
-            (match v with
-             | `L_forw (node, ctx) ->
-               (* Logs.debug "  Var kind: forward"; *)
-               Logs.debug "  Node: %a" Node.pretty_trace node;
-               (try
-                  Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
-                with e ->
-                  Logs.debug "  Context: ERROR - %s" (Printexc.to_string e)
-               );
-             | `L_backw (node, ctx) ->
-               (* Logs.debug "  Var kind: backward"; *)
-               Logs.debug "  Node: %a" Node.pretty_trace node;
-               (try
-                  Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
-                with e ->
-                  Logs.debug "  Context: ERROR - %s" (Printexc.to_string e)
-               )
-            );
-            (match state with 
-             | `Lifted1 d ->
-               (try
-                  (* Logs.debug "  State kind: Lifted1"; *)
-                  Logs.debug "  State: %a" Spec_forw.D.pretty d
-                with e ->
-                  Logs.debug "  State: ERROR - %s" (Printexc.to_string e)
-               );
-               (
-                  let base_id = MCPRegistry.find_id "base" in
-                  let d_list : (int * Obj.t) list = Obj.magic d in
-                  match List.assoc_opt base_id d_list with
-                  | Some base_state ->
-                    let module BaseDom = (val (MCPRegistry.find_spec base_id).dom : Lattice.S) in
-                    Logs.debug "  MCP base: %a" BaseDom.pretty (Obj.obj base_state)
-                  | None ->
-                    Logs.debug "  MCP base: <missing>"
-                );
-             | `Lifted2 d ->
-               (try
-                  (* Logs.debug "  State kind: Lifted2"; *)
-                  Logs.debug "  State: %a" Spec_backw.D.pretty d
-                with e ->
-                  Logs.debug "  State: ERROR - %s" (Printexc.to_string e)
-               );
-             | `Top ->
-               Logs.debug "  State kind: Top";
-             | `Bot ->
-               Logs.debug "  State kind: Bot"
-            );
-          ) lh;
-        Logs.debug "Total entries in LHT: %d" !count;
-        Logs.debug "=== End LHT Contents ==="
-      in
-      log_lh_contents lh;
-
+      Logs.debug "--- Full entry details ---";
+      LHT.iter (fun v state ->
+          incr count;
+          Logs.debug "Entry %d:" !count;
+          Logs.debug "  Var: %a" EQSys.LVar.pretty_trace v;
+          (match v with
+           | `L_forw (node, ctx) ->
+             (* Logs.debug "  Var kind: forward"; *)
+             Logs.debug "  Node: %a" Node.pretty_trace node;
+             (try
+                Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
+              with e ->
+                Logs.debug "  Context: ERROR - %s" (Printexc.to_string e)
+             );
+           | `L_backw (node, ctx) ->
+             (* Logs.debug "  Var kind: backward"; *)
+             Logs.debug "  Node: %a" Node.pretty_trace node;
+             (try
+                Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
+              with e ->
+                Logs.debug "  Context: ERROR - %s" (Printexc.to_string e)
+             )
+          );
+          (match state with 
+           | `Lifted1 d ->
+             (try
+                (* Logs.debug "  State kind: Lifted1"; *)
+                Logs.debug "  State: %a" Spec_forw.D.pretty d
+              with e ->
+                Logs.debug "  State: ERROR - %s" (Printexc.to_string e)
+             );
+             (
+               let base_id = MCPRegistry.find_id "base" in
+               let d_list : (int * Obj.t) list = Obj.magic d in
+               match List.assoc_opt base_id d_list with
+               | Some base_state ->
+                 let module BaseDom = (val (MCPRegistry.find_spec base_id).dom : Lattice.S) in
+                 Logs.debug "  MCP base: %a" BaseDom.pretty (Obj.obj base_state)
+               | None ->
+                 Logs.debug "  MCP base: <missing>"
+             );
+           | `Lifted2 d ->
+             (try
+                (* Logs.debug "  State kind: Lifted2"; *)
+                Logs.debug "  State: %a" Spec_backw.D.pretty d
+              with e ->
+                Logs.debug "  State: ERROR - %s" (Printexc.to_string e)
+             );
+           | `Top ->
+             Logs.debug "  State kind: Top";
+           | `Bot ->
+             Logs.debug "  State kind: Bot"
+          );
+        ) lh;
+      Logs.debug "Total entries in LHT: %d" !count;
+      Logs.debug "=== End LHT Contents ==="
     in
+    log_lh_contents lh;
 
-    solve();
+  in
+
+  solve();
 end
 
 

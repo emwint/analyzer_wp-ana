@@ -553,14 +553,14 @@ struct
     match var with
     | `L_forw v ->
       Forward.system v
-       |> Option.map (fun tf getl sidel demandl getg sideg ->
-        let getl' v = getl (`L_forw v) |> to_forw_d in
-        let sidel' v d = sidel (`L_forw v) (of_forw_d d) in
-        let demandl' v = demandl (`L_forw v) in
-        let getg' v = getg (`G_forw v) |> to_forw_g in
-        let sideg' v d = sideg (`G_forw v) (of_forw_g d) in
-        tf getl' sidel' demandl' getg' sideg' |> of_forw_d
-       )
+      |> Option.map (fun tf getl sidel demandl getg sideg ->
+          let getl' v = getl (`L_forw v) |> to_forw_d in
+          let sidel' v d = sidel (`L_forw v) (of_forw_d d) in
+          let demandl' v = demandl (`L_forw v) in
+          let getg' v = getg (`G_forw v) |> to_forw_g in
+          let sideg' v d = sideg (`G_forw v) (of_forw_g d) in
+          tf getl' sidel' demandl' getg' sideg' |> of_forw_d
+        )
     | `L_backw v ->
       system_backw v
       |> Option.map (fun tf getl sidel demandl getg sideg ->
