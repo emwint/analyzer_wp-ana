@@ -17,11 +17,11 @@ open BidirConstrains
 module type S2S = Spec2Spec
 
 (*module that takes a Spec and a Context Domain type C and returns a SPec using this context instead*)
-module ContextOverride (S: Spec) (C: Printable.S) : Spec with module C = C =
+module ContextOverride (S: Spec) (S_forw: Spec) : Spec with module C = S_forw.C =
 struct
   module D = S.D
   module G = S.G
-  module C = C
+  module C = S_forw.C
   module V = S.V
   module P = S.P
 
@@ -38,7 +38,9 @@ struct
   let coerce_man (man: (D.t, G.t, C.t, V.t) man) : (D.t, G.t, S.C.t, V.t) man =
     Obj.magic man
 
-  let context man fd d = Obj.magic (S.context (coerce_man man) fd d)
+  let context man fd d = 
+    (* let man_forw = S_forw.context man fd d in *)
+    Obj.magic (S.context (coerce_man man) fd d)
   let startcontext () = Obj.magic (S.startcontext ())
 
   let sync man k = S.sync (coerce_man man) k
@@ -1894,7 +1896,7 @@ struct
 
     let do_backward_inits () = 
 
-      let sideg_backw v d = sideg (`G_backw (v)) ((`Lifted2 d)) in
+      let sideg_backw v d = sideg (`G_backw v) (EQSys.G.create_spec (`Lifted2 d)) in
       let getg_backw v =
         match EQSys.G.spec (getg (`G_backw v)) with
         | `Lifted1 _ -> failwith "Unexpected backward global state"
@@ -1945,7 +1947,7 @@ struct
           ; global  = (fun _ -> Spec_backw.G.bot ())
           ; spawn   = (fun ?(multiple=false) _ -> failwith "Global initializers should never spawn threads. What is going on?")
           ; split   = (fun _ -> failwith "Global initializers trying to split paths.")
-          ; sideg   = (fun g d -> sideg_backw (GV_backw.spec g) (G_backw.create_spec d))
+          ; sideg   = (fun g d -> sideg_backw (GV_backw.spec g) d)
           }
         in
 
@@ -1977,7 +1979,6 @@ struct
 
       let startstate, _ = do_global_inits_backw file in
 
-
       (** calculate startvars *)
       let calculate_startvars_backw ()  =
 
@@ -1989,13 +1990,13 @@ struct
             ; node    = MyCFG.dummy_node
             ; prev_node = MyCFG.dummy_node
             ; control_context = (fun () -> man_failwith "enter_with has no control_context.")
-            ; context = Spec_backw.startcontext
+            ; context = Spec_forw.startcontext
             ; edge    = MyCFG.Skip
             ; local   = st
             ; global  = (fun g -> G_backw.spec (getg_backw (GV_backw.spec g)))
             ; spawn   = (fun ?(multiple=false) _ -> failwith "Bug1: Using enter_func for toplevel functions with 'otherstate'.")
             ; split   = (fun _ -> failwith "Bug2: Using enter_func for toplevel functions with 'otherstate'.")
-            ; sideg   = (fun g d -> sideg_backw (GV_backw.spec g) (G_backw.create_spec (d)))
+            ; sideg   = (fun g d -> sideg_backw (GV_backw.spec g) d)
             }
           in
           let args = List.map (fun x -> MyCFG.unknown_exp) fd.sformals in
@@ -2027,11 +2028,11 @@ struct
             ; global  = (fun g -> G_backw.spec (getg_backw (GV_backw.spec g)))
             ; spawn   = (fun ?(multiple=false) _ -> failwith "Bug1: Using enter_func for toplevel functions with 'otherstate'.")
             ; split   = (fun _ -> failwith "Bug2: Using enter_func for toplevel functions with 'otherstate'.")
-            ; sideg   = (fun g d -> sideg_backw  (GV_backw.spec g) (G_backw.create_spec (d)))
+            ; sideg   = (fun g d -> sideg_backw (GV_backw.spec g) d)
             }
           in
           (* TODO: don't hd *)
-          List.hd (Spec_forw.threadenter man ~multiple:false None v [])
+          List.hd (Spec_backw.threadenter man ~multiple:false None v [])
           (* TODO: do threadspawn to mainfuns? *)
         in
         let prestartstate = Spec_backw.startstate MyCFG.dummy_func.svar in (* like in do_extern_inits *)
@@ -2042,156 +2043,180 @@ struct
 
         AnalysisState.global_initialization := false;
 
+        (*
         let man e =
           { ask     = (fun (type a) (q: a Queries.t) -> Queries.Result.top q)
           ; emit   = (fun _ -> failwith "Cannot \"emit\" in enter_with context.")
           ; node    = MyCFG.dummy_node
           ; prev_node = MyCFG.dummy_node
           ; control_context = (fun () -> man_failwith "enter_with has no control_context.")
-          ; context = Spec_backw.startcontext
+          ; context = Spec_forw.startcontext
           ; edge    = MyCFG.Skip
           ; local   = e
           ; global  = (fun g -> G_backw.spec (getg_backw (GV_backw.spec g)))
           ; spawn   = (fun ?(multiple=false) _ -> failwith "Bug1: Using enter_func for toplevel functions with 'otherstate'.")
           ; split   = (fun _ -> failwith "Bug2: Using enter_func for toplevel functions with 'otherstate'.")
-          ; sideg   = (fun g d -> sideg_backw (GV_backw.spec g) (G_backw.create_spec d))
+          ; sideg   = (fun g d -> sideg_backw (GV_backw.spec g) d)
           }
         in
         let startvars' = List.map (fun (n,e) -> (MyCFG.FunctionEntry n, Spec_backw.context (man e) n e)) startvars in
-        let entrystates = List.map (fun (n,e) -> (MyCFG.FunctionEntry n, Spec_backw.context (man e) n e), e) startvars in
+        let entrystates = List.map (fun (n,e) -> (MyCFG.Function n, Spec_backw.context (man e) n e), e) startvars in *)
+
+        (* Using dummy contexts which will be replaced by the contextx of the forward functions*)
+        let startvars' = List.map (fun (n,e) -> (MyCFG.FunctionEntry n, Spec_forw.startcontext)) startvars in
+        let entrystates = List.map (fun (n,e) -> (MyCFG.Function n, Spec_forw.startcontext), e) startvars in
 
         startvars', entrystates
       in
 
       calculate_startvars_backw ()
-
-  (** Combining the solver input calculation from the forwards and backwards part of the constrant system*)
-  let calculate_solver_input () = 
-    let entrystates_global = GHT.to_list gh in
-    let startvars'_forw, entrystates_forw = do_forward_inits () in
-
-    (* Lifting the  forward satrtvars and entrystates to the constraint systems types*)
-    let startvars' = List.map (fun v -> `L_forw v) startvars'_forw in
-    let entrystates = List.map (fun (v, d) -> (`L_forw v, `Lifted1 d)) entrystates_forw in
-
-    startvars', entrystates, entrystates_global
-  in
-
-  let solve () = 
-    let solver_data = None in
-    let startvars', entrystates, entrystates_global = calculate_solver_input () in
-
-    let log_analysis_inputs () =
-      Logs.debug "=== Analysis Inputs ===";
-
-      (* Log entrystates *)
-      Logs.debug "--- Entry States (count: %d) ---" (List.length entrystates);
-      List.iteri (fun i (v, state) ->
-          Logs.debug "EntryState %d:" (i + 1);
-          Logs.debug "  Var: %a" EQSys.LVar.pretty_trace v;
-          (match v with
-           | `L_forw (node, ctx)
-           | `L_backw (node, ctx) ->
-             Logs.debug "  Node: %a" Node.pretty_trace node;
-             Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
-          );
-          Logs.debug "  State: %a" EQSys.D.pretty state;
-        ) entrystates;
-
-      (* Log entrystates_global *)
-      Logs.debug "--- Global Entry States (count: %d) ---" (List.length entrystates_global);
-      List.iteri (fun i (gvar, gstate) ->
-          Logs.debug "GlobalEntryState %d:" (i + 1);
-          Logs.debug "  GVar: %a" EQSys.GVar.pretty_trace gvar;
-          Logs.debug "  GState: %a" EQSys.G.pretty gstate;
-        ) entrystates_global;
-
-      (* Log startvars' *)
-      Logs.debug "--- Start Variables (count: %d) ---" (List.length startvars');
-      List.iteri (fun i v ->
-          Logs.debug "StartVar %d:" (i + 1);
-          Logs.debug "  Var: %a" EQSys.LVar.pretty_trace v;
-          (match v with
-           | `L_forw (node, ctx)
-           | `L_backw (node, ctx) ->
-             Logs.debug "  Node: %a" Node.pretty_trace node;
-             Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
-          )
-        ) startvars';
-
-      Logs.debug "=== End Analysis Inputs ==="
     in
-    log_analysis_inputs ();
 
-    let (lh, gh), solver_data = Timing.wrap "solving" (Slvr.solve entrystates entrystates_global startvars') solver_data in
+    (** Combining the solver input calculation from the forwards and backwards part of the constrant system*)
+    let calculate_solver_input () = 
+      let entrystates_global = GHT.to_list gh in
+      let startvars'_forw, entrystates_forw = do_forward_inits () in
+      let startvars'_backw, entrystates_backw = do_backward_inits () in
 
-    let log_lh_contents lh =
-      Logs.debug "=== LHT Contents ===";
-      Logs.debug "LHT size: %d" (LHT.length lh);
-      let count = ref 0 in
+      (* Let's assume there is onyl one entrystate and startvar each. In what examples is this not the case?*)
+      let forward_context = match startvars'_forw with
+        | (_, ctx) :: _ -> ctx
+        | [] -> failwith "No startvars from forward analysis"
+      in 
+      let startvars'_backw = List.map (fun (n, _) -> (n, forward_context)) startvars'_backw in
+      let entrystates_backw = List.map (fun ((n, _), d) -> ((n, forward_context), d)) entrystates_backw in
 
-      Logs.debug "--- Full entry details ---";
-      LHT.iter (fun v state ->
-          incr count;
-          Logs.debug "Entry %d:" !count;
-          Logs.debug "  Var: %a" EQSys.LVar.pretty_trace v;
-          (match v with
-           | `L_forw (node, ctx) ->
-             (* Logs.debug "  Var kind: forward"; *)
-             Logs.debug "  Node: %a" Node.pretty_trace node;
-             (try
-                Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
-              with e ->
-                Logs.debug "  Context: ERROR - %s" (Printexc.to_string e)
-             );
-           | `L_backw (node, ctx) ->
-             (* Logs.debug "  Var kind: backward"; *)
-             Logs.debug "  Node: %a" Node.pretty_trace node;
-             (try
-                Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
-              with e ->
-                Logs.debug "  Context: ERROR - %s" (Printexc.to_string e)
-             )
-          );
-          (match state with 
-           | `Lifted1 d ->
-             (try
-                (* Logs.debug "  State kind: Lifted1"; *)
-                Logs.debug "  State: %a" Spec_forw.D.pretty d
-              with e ->
-                Logs.debug "  State: ERROR - %s" (Printexc.to_string e)
-             );
-             (
-               let base_id = MCPRegistry.find_id "base" in
-               let d_list : (int * Obj.t) list = Obj.magic d in
-               match List.assoc_opt base_id d_list with
-               | Some base_state ->
-                 let module BaseDom = (val (MCPRegistry.find_spec base_id).dom : Lattice.S) in
-                 Logs.debug "  MCP base: %a" BaseDom.pretty (Obj.obj base_state)
-               | None ->
-                 Logs.debug "  MCP base: <missing>"
-             );
-           | `Lifted2 d ->
-             (try
-                (* Logs.debug "  State kind: Lifted2"; *)
-                Logs.debug "  State: %a" Spec_backw.D.pretty d
-              with e ->
-                Logs.debug "  State: ERROR - %s" (Printexc.to_string e)
-             );
-           | `Top ->
-             Logs.debug "  State kind: Top";
-           | `Bot ->
-             Logs.debug "  State kind: Bot"
-          );
-        ) lh;
-      Logs.debug "Total entries in LHT: %d" !count;
-      Logs.debug "=== End LHT Contents ==="
+      (* Lifting and combining the startvars and entrystates from forwards and backwards analysis*)
+      let startvars' = List. append (List.map (fun v -> `L_forw v) startvars'_forw) (List.map (fun v -> `L_backw v) startvars'_backw) in
+      let entrystates = List.append (List.map (fun (v, d) -> (`L_forw v, `Lifted1 d)) entrystates_forw) (List.map (fun (v, d) -> (`L_backw v, `Lifted2 d)) entrystates_backw) in
+
+      startvars', entrystates, entrystates_global
     in
-    log_lh_contents lh;
 
-  in
+    let solve () = 
+      let solver_data = None in
+      let startvars', entrystates, entrystates_global = calculate_solver_input () in
 
-  solve();
+      let log_analysis_inputs () =
+        Logs.debug "=== Analysis Inputs ===";
+
+        (* Log entrystates *)
+        Logs.debug "--- Entry States (count: %d) ---" (List.length entrystates);
+        List.iteri (fun i (v, state) ->
+            Logs.debug "EntryState %d:" (i + 1);
+            Logs.debug "  Var: %a" EQSys.LVar.pretty_trace v;
+            (match v with
+             | `L_forw (node, ctx)
+             | `L_backw (node, ctx) ->
+               Logs.debug "  Node: %a" Node.pretty_trace node;
+               Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
+            );
+            (match state with 
+             | `Lifted1 d ->
+               Logs.debug "  State: %a" Spec_forw.D.pretty d
+             | `Lifted2 d ->
+               Logs.debug "  State: %a" Spec_backw.D.pretty d
+             | `Top ->
+               Logs.debug "  State kind: Top";
+             | `Bot ->
+               Logs.debug "  State kind: Bot"
+            );
+          ) entrystates;
+
+        (* Log entrystates_global *)
+        Logs.debug "--- Global Entry States (count: %d) ---" (List.length entrystates_global);
+        List.iteri (fun i (gvar, gstate) ->
+            Logs.debug "GlobalEntryState %d:" (i + 1);
+            Logs.debug "  GVar: %a" EQSys.GVar.pretty_trace gvar;
+            Logs.debug "  GState: %a" EQSys.G.pretty gstate;
+          ) entrystates_global;
+
+        (* Log startvars' *)
+        Logs.debug "--- Start Variables (count: %d) ---" (List.length startvars');
+        List.iteri (fun i v ->
+            Logs.debug "StartVar %d:" (i + 1);
+            Logs.debug "  Var: %a" EQSys.LVar.pretty_trace v;
+            (match v with
+             | `L_forw (node, ctx)
+             | `L_backw (node, ctx) ->
+               Logs.debug "  Node: %a" Node.pretty_trace node;
+               Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
+            )
+          ) startvars';
+
+        Logs.debug "=== End Analysis Inputs ==="
+      in
+      log_analysis_inputs ();
+
+      let (lh, gh), solver_data = Slvr.solve entrystates entrystates_global startvars' solver_data in
+
+      let log_lh_contents lh =
+        Logs.debug "=== LHT Contents ===";
+        Logs.debug "LHT size: %d" (LHT.length lh);
+        let count = ref 0 in
+
+        Logs.debug "--- Full entry details ---";
+        LHT.iter (fun v state ->
+            incr count;
+            Logs.debug "Entry %d:" !count;
+            Logs.debug "  Var: %a" EQSys.LVar.pretty_trace v;
+            (match v with
+             | `L_forw (node, ctx) ->
+               (* Logs.debug "  Var kind: forward"; *)
+               Logs.debug "  Node: %a" Node.pretty_trace node;
+               (try
+                  Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
+                with e ->
+                  Logs.debug "  Context: ERROR - %s" (Printexc.to_string e)
+               );
+             | `L_backw (node, ctx) ->
+               (* Logs.debug "  Var kind: backward"; *)
+               Logs.debug "  Node: %a" Node.pretty_trace node;
+               (try
+                  Logs.debug "  Context: %a" Spec_forw.C.pretty ctx
+                with e ->
+                  Logs.debug "  Context: ERROR - %s" (Printexc.to_string e)
+               )
+            );
+            (match state with 
+             | `Lifted1 d ->
+               (try
+                  (* Logs.debug "  State kind: Lifted1"; *)
+                  Logs.debug "  State: %a" Spec_forw.D.pretty d
+                with e ->
+                  Logs.debug "  State: ERROR - %s" (Printexc.to_string e)
+               );
+               (
+                 let base_id = MCPRegistry.find_id "base" in
+                 let d_list : (int * Obj.t) list = Obj.magic d in
+                 match List.assoc_opt base_id d_list with
+                 | Some base_state ->
+                   let module BaseDom = (val (MCPRegistry.find_spec base_id).dom : Lattice.S) in
+                   Logs.debug "  MCP base: %a" BaseDom.pretty (Obj.obj base_state)
+                 | None ->
+                   Logs.debug "  MCP base: <missing>"
+               );
+             | `Lifted2 d ->
+               (try
+                  (* Logs.debug "  State kind: Lifted2"; *)
+                  Logs.debug "  State: %a" Spec_backw.D.pretty d
+                with e ->
+                  Logs.debug "  State: ERROR - %s" (Printexc.to_string e)
+               );
+             | `Top ->
+               Logs.debug "  State kind: Top";
+             | `Bot ->
+               Logs.debug "  State kind: Bot"
+            );
+          ) lh;
+        Logs.debug "Total entries in LHT: %d" !count;
+        Logs.debug "=== End LHT Contents ==="
+      in
+      log_lh_contents lh;
+
+    in
+
+    solve();
 end
 
 
@@ -2582,7 +2607,7 @@ let rec analyze_loop (module CFG : CfgBidirSkip) file fs change_info =
     let module DummyWPSPec = Wp_test.Spec in
     (* let module B = AnalyzeCFG_2 (CFG) (DummyWPSPec) (struct let increment = change_info end) in *)
 
-    let module DummyWPSPec = ContextOverride (DummyWPSPec) (Spec.C)  in
+    let module DummyWPSPec = ContextOverride (DummyWPSPec) (Spec)  in
     let module C = AnalyzeCFG_3 (CFG) (Spec) (DummyWPSPec) (struct let increment = change_info end) in 
     GobConfig.with_immutable_conf (fun () ->
         (* A.analyze file fs;

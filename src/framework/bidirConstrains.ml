@@ -103,7 +103,19 @@ struct
     | `L_forw (n, l) -> `L_backw (n, l)
     | `L_backw (n, l) -> `L_backw (n, l)
 
+  let getl_backw_wrapper (getl: LVar.t -> D.t) (v: node * S_forw.C.t) : S_backw.D.t =
+    match getl (`L_backw v) with
+    | `Lifted2 d -> d
+    | `Bot -> S_backw.D.bot ()
+    | `Top -> S_backw.D.top ()
+    | `Lifted1 _ -> failwith "bidirConstrains: backward local got forward value" 
 
+  let getl_forw_wrapper (getl: LVar.t -> D.t) (v: node * S_forw.C.t) : S_forw.D.t =
+    match getl (`L_forw v) with
+    | `Lifted2 _ -> failwith "bidirConstrains: forward local got backward value" 
+    | `Bot -> S_forw.D.bot ()
+    | `Top -> S_forw.D.top ()
+    | `Lifted1 d -> d
   let cset_to_forw c =
     G.CSet.fold (fun x acc -> Forward.G.CSet.add x acc) c (Forward.G.CSet.empty ())
 
@@ -200,6 +212,8 @@ struct
     and spawn ?(multiple=false) lval f args =
       (* TODO: adjust man node/edge? *)
       (* TODO: don't repeat for all paths that spawn same *)
+
+      (* This porbalbly needs to be changed for backwards*)
       let ds = S_backw.threadenter ~multiple man lval f args in
       List.iter (fun d ->
           spawns := (lval, f, args, d, multiple) :: !spawns;
@@ -260,12 +274,12 @@ struct
 
   let common_joins_backw man ds splits spawns = common_join_backw man (bigsqcup_backw ds) splits spawns
 
-  let tf_assign_backw var edge prev_node lv e getl sidel demandl getg sideg d =
+  let tf_assign_backw var edge prev_node lv e getl getl_forw sidel demandl getg sideg d =
     let man, r, spawns = common_man_backw var edge prev_node d getl sidel demandl getg sideg in
     let d = S_backw.assign man lv e in (* Force transfer function to be evaluated before dereferencing in common_join argument. *)
     common_join_backw man d !r !spawns
 
-  let tf_vdecl_backw var edge prev_node v getl sidel demandl getg sideg d =
+  let tf_vdecl_backw var edge prev_node v getl getl_forw sidel demandl getg sideg d =
     let man, r, spawns = common_man_backw var edge prev_node d getl sidel demandl getg sideg in
     let d = S_backw.vdecl man v in (* Force transfer function to be evaluated before dereferencing in common_join argument. *)
     common_join_backw man d !r !spawns
@@ -281,7 +295,7 @@ struct
     let nval = S_backw.sync { man with local = spawning_return } `Return in
     nval
 
-  let tf_ret_backw var edge prev_node ret fd getl sidel demandl getg sideg d =
+  let tf_ret_backw var edge prev_node ret fd getl getl_forw sidel demandl getg sideg d =
     let man, r, spawns = common_man_backw var edge prev_node d getl sidel demandl getg sideg in
     let d = (* Force transfer function to be evaluated before dereferencing in common_join argument. *)
       if (CilType.Fundec.equal fd MyCFG.dummy_func ||
@@ -292,7 +306,7 @@ struct
     in
     common_join_backw man d !r !spawns
 
-  let tf_entry_backw var edge prev_node fd getl sidel demandl getg sideg d =
+  let tf_entry_backw var edge prev_node fd getl getl_forw sidel demandl getg sideg d =
     (* Side effect function context here instead of at sidel to FunctionEntry,
        because otherwise context for main functions (entrystates) will be missing or pruned during postsolving. *)
     let c: unit -> S_forw.C.t = snd var |> Obj.obj in
@@ -301,13 +315,13 @@ struct
     let d = S_backw.body man fd in (* Force transfer function to be evaluated before dereferencing in common_join argument. *)
     common_join_backw man d !r !spawns
 
-  let tf_test_backw var edge prev_node e tv getl sidel demandl getg sideg d =
+  let tf_test_backw var edge prev_node e tv getl getl_forw sidel demandl getg sideg d =
     let man, r, spawns = common_man_backw var edge prev_node d getl sidel demandl getg sideg in
     let d = S_backw.branch man e tv in (* Force transfer function to be evaluated before dereferencing in common_join argument. *)
     common_join_backw man d !r !spawns
 
   (*TODO: THIS HAS TO BE BACKWARDS*) (*forward context not implemented yet*)
-  let tf_normal_call_backw man lv e (f:fundec) args getl sidel demandl getg sideg =
+  let tf_normal_call_backw man lv e (f:fundec) args getl getl_forw sidel demandl getg sideg =
     let combine (cd, fc, fd) =
       if M.tracing then M.traceli "combine" "local: %a" S_backw.D.pretty cd;
       if M.tracing then M.trace "combine" "function: %a" S_backw.D.pretty fd;
@@ -370,10 +384,36 @@ struct
       Logs.debug "manager info at call to %a" Node.pretty man.node;
       S_backw.enter man lv f args in
     (* Wollen eig vorwärts-kontext benutzen *)
-    let paths = List.map (fun (c,v) -> (c, S_backw.context man f v, v)) paths in
+    (* getl_forw should query the corresopoding unknown from the forward analysis *)
+    (* context = S_forw.context (S_forw.enter (getl_forw [this_node_, this_context])) *)
 
+    let r = ref [] in
+    let rec man_forw =
+      { ask     = (fun (type a) (q: a Queries.t) -> failwith "manager for calculating context does not support queries")
+      ; emit    = (fun _ -> failwith "emit outside MCP")
+      ; node    = man.node
+      ; prev_node = man.prev_node (* this is problematic, as this is backwards *)
+      ; control_context = man.control_context
+      ; context = man.context
+      ; edge    = man.edge
+      ; local   = (getl_forw (man.node, man.context ()))
+      ; global  = (fun _ -> failwith "manager for calculating context does not have globals")
+      ; spawn   = (fun ?multiple _ _ _ -> failwith "manager for calculating context does not support spawn")
+      ; split   = (fun (d:S_forw.D.t) es -> assert (List.is_empty es); r := d::!r) 
+      ; sideg   = (fun _ _ -> failwith "manager for calculating context does not support sideg")
+      } in
+
+    let paths_forw = 
+      Logs.debug "forward manager info at call to %a" Node.pretty man_forw.node;
+      S_forw.enter man_forw lv f args in
+
+    let paths = List.combine paths paths_forw in
+
+    (* this list now uses forward contexts*)
+    let paths = List.map (fun ((c,v),(a,b)) -> (c, S_forw.context man_forw f b, v)) paths in
     (* List.iter (fun (c,fc,v) -> if not (S_backw.D.is_bot v) then sidel (FunctionEntry f, fc) v) paths; *)
-    List.iter (fun (c,fc,v) -> if not (S_backw.D.is_bot v) then sidel (Function f, fc) v) paths;
+
+    List.iter (fun (c,fc,v) -> if not (S_backw.D.is_bot v) then sidel (Function f, fc) v) paths; 
     (* let paths = List.map (fun (c,fc,v) -> (c, fc, if S_backw.D.is_bot v then v else getl (Function f, fc))) paths; *)
     (* *)
     let paths = List.map (fun (c,fc,v) -> (c, fc, if S_backw.D.is_bot v then v else getl (FunctionEntry f, fc))) paths in
@@ -390,7 +430,7 @@ struct
     r
 
   (*TODO: HERE AS WELL*)
-  let rec tf_proc_backw var edge prev_node lv e args getl sidel demandl getg sideg d =
+  let rec tf_proc_backw var edge prev_node lv e args getl getl_forw sidel demandl getg sideg d =
     let tf_special_call man f =
       let once once_control init_routine =
         (* Executes leave event for new local state d if it is not bottom *)
@@ -408,7 +448,7 @@ struct
         in
         let first_call =
           let d' = S_backw.event man (Events.EnterOnce { once_control;  ran = false }) man in
-          tf_proc_backw var edge prev_node None init_routine [] getl sidel demandl getg sideg d'
+          tf_proc_backw var edge prev_node None init_routine [] getl getl_forw sidel demandl getg sideg d'
         in
         let later_call = S_backw.event man (Events.EnterOnce { once_control;  ran = true }) man in
         S_backw.D.join (leave_once first_call) (leave_once later_call)
@@ -446,7 +486,7 @@ struct
                M.info ~category:Analyzer "Using special for defined function %s" f.vname;
                tf_special_call man f
              | fd ->
-               tf_normal_call_backw man lv e fd args getl sidel demandl getg sideg
+               tf_normal_call_backw man lv e fd args getl getl_forw sidel demandl getg sideg
              | exception Not_found ->
                tf_special_call man f)
           in
@@ -468,17 +508,17 @@ struct
     end else
       common_joins_backw man funs !r !spawns
 
-  let tf_asm_backw var edge prev_node getl sidel demandl getg sideg d =
+  let tf_asm_backw var edge prev_node getl getl_forw sidel demandl getg sideg d =
     let man, r, spawns = common_man_backw var edge prev_node d getl sidel demandl getg sideg in
     let d = S_backw.asm man in (* Force transfer function to be evaluated before dereferencing in common_join argument. *)
     common_join_backw man d !r !spawns
 
-  let tf_skip_backw var edge prev_node getl sidel demandl getg sideg d =
+  let tf_skip_backw var edge prev_node getl getl_forw sidel demandl getg sideg d =
     let man, r, spawns = common_man_backw var edge prev_node d getl sidel demandl getg sideg in
     let d = S_backw.skip man in (* Force transfer function to be evaluated before dereferencing in common_join argument. *)
     common_join_backw man d !r !spawns
 
-  let tf_backw var getl sidel demandl getg sideg prev_node edge d =
+  let tf_backw var getl getl_forw sidel demandl getg sideg prev_node edge d =
     begin match edge with
       | Assign (lv,rv) -> tf_assign_backw var edge prev_node lv rv
       | VDecl (v)      -> tf_vdecl_backw var edge prev_node v
@@ -488,9 +528,9 @@ struct
       | Test (p,b)     -> tf_test_backw var edge prev_node p b
       | ASM (_, _, _)  -> tf_asm_backw var edge prev_node (* TODO: use ASM fields for something? *)
       | Skip           -> tf_skip_backw var edge prev_node
-    end getl sidel demandl getg sideg d
+    end getl getl_forw sidel demandl getg sideg d
 
-  let tf_backw var getl sidel demandl getg sideg prev_node (_,edge) d (f,t) =
+  let tf_backw var getl getl_forw sidel demandl getg sideg prev_node (_,edge) d (f,t) =
     (* let old_loc  = !Goblint_tracing.current_loc in
        let old_loc2 = !Goblint_tracing.next_loc in
        Goblint_tracing.current_loc := f;
@@ -502,14 +542,14 @@ struct
         let d       = tf_backw var getl sidel demandl getg sideg prev_node edge d in
         d
        ) *)
-    tf_backw var getl sidel demandl getg sideg prev_node edge d
+    tf_backw var getl getl_forw sidel demandl getg sideg prev_node edge d
 
-  let tf_backw (v,c) (edges, u) getl sidel demandl getg sideg =
+  let tf_backw (v,c) (edges, u) getl getl_forw sidel demandl getg sideg =
     let pval = getl (u,c) in
     let _, locs = List.fold_right (fun (f,e) (t,xs) -> f, (f,t)::xs) edges (Node.location v,[]) in
-    List.fold_left2 (|>) pval (List.map (tf_backw (v,Obj.repr (fun () -> c)) getl sidel demandl getg sideg u) edges) locs
+    List.fold_left2 (|>) pval (List.map (tf_backw (v,Obj.repr (fun () -> c)) getl getl_forw sidel demandl getg sideg u) edges) locs
 
-  let tf_backw (v,c) (e,u) getl sidel demandl getg sideg =
+  let tf_backw (v,c) (e,u) getl getl_forw sidel demandl getg sideg =
     let old_node = !current_node in
     let old_fd = Option.map Node.find_fundec old_node |? Cil.dummyFunDec in
     let new_fd = Node.find_fundec v in
@@ -524,15 +564,18 @@ struct
         if not (CilType.Fundec.equal old_fd new_fd) then
           Timing.Program.exit new_fd.svar.vname
       ) (fun () ->
-        let d       = tf_backw (v,c) (e,u) getl sidel demandl getg sideg in
+        let d       = tf_backw (v,c) (e,u) getl getl_forw sidel demandl getg sideg in
         d
       )
 
   let system_backw (v,c) =
+
     match v with
     | FunctionEntry _ ->
       let tf_backw getl sidel demandl getg sideg =
-        let tf' eu = tf_backw (v,c) eu getl sidel demandl getg sideg in
+        let getl_backw = getl_backw_wrapper getl in
+        let getl_forw =  getl_forw_wrapper getl in
+        let tf' eu = tf_backw (v,c) eu getl_backw getl_forw sidel demandl getg sideg in
         let xs = List.map tf' (Cfg.next v) in
         List.fold_left S_backw.D.join (S_backw.D.bot ()) xs
       in
@@ -541,14 +584,16 @@ struct
       None
     | _ ->
       let tf_backw getl sidel demandl getg sideg =
-        let tf' eu = tf_backw (v,c) eu getl sidel demandl getg sideg in
+        let getl_backw = getl_backw_wrapper getl in
+        let getl_forw =  getl_forw_wrapper getl in
+        let tf' eu = tf_backw (v,c) eu getl_backw getl_forw sidel demandl getg sideg in
         let xs = List.map tf' (Cfg.next v) in
         List.fold_left S_backw.D.join (S_backw.D.bot ()) xs
       in
-
       Some tf_backw
 
 
+  (*WEIRD VARIABLE TYPES??*)
   let system var =
     match var with
     | `L_forw v ->
@@ -564,12 +609,12 @@ struct
     | `L_backw v ->
       system_backw v
       |> Option.map (fun tf getl sidel demandl getg sideg ->
-          let getl' v = getl (`L_backw (forw_lv_of_backw v)) |> to_backw_d in
+          (* let getl' (v : Backward.LVar.t) : (S_backw.D.t) = getl (`L_backw (forw_lv_of_backw v)) |> to_backw_d in *)
           let sidel' v d = sidel (`L_backw (forw_lv_of_backw v)) (of_backw_d d) in
           let demandl' v = demandl (`L_backw (forw_lv_of_backw v)) in
           let getg' v = getg (`G_backw v) |> to_backw_g in
           let sideg' v d = sideg (`G_backw v) (of_backw_g d) in
-          tf getl' sidel' demandl' getg' sideg' |> of_backw_d
+          tf getl sidel' demandl' getg' sideg' |> of_backw_d
         )
 
   let iter_vars getl getg vq fl fg =
