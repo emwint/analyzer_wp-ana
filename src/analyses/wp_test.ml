@@ -84,8 +84,8 @@ struct
 
   (* TODO *)
   let enter man (lval: lval option) (f:fundec) (args:exp list) =
-    Logs.debug "=== enter function %s with args %s ===" f.svar.vname 
-      (String.concat ", " (List.map (CilType.Exp.show) args));
+    (* Logs.debug "=== enter function %s with args %s ===" f.svar.vname 
+       (String.concat ", " (List.map (CilType.Exp.show) args)); *)
 
     let vars =
       match lval with 
@@ -98,12 +98,12 @@ struct
 
   (* TODO *)
   let combine_env man (lval:lval option) fexp (f:fundec) (args:exp list) fc au (f_ask: Queries.ask) =
-    Logs.debug "=== combine_env of function %s ===" f.svar.vname;
-    let args_pretty = String.concat ", " (List.map CilType.Exp.show args) in
-    Logs.debug "    args: %s" args_pretty;
+    (* Logs.debug "=== combine_env of function %s ===" f.svar.vname;
+       let args_pretty = String.concat ", " (List.map CilType.Exp.show args) in
+       Logs.debug "    args: %s" args_pretty;
 
-    let sformals_pretty = String.concat ", " (List.map (fun v -> v.vname) f.sformals) in
-    Logs.debug "    sformals: %s" sformals_pretty;
+       let sformals_pretty = String.concat ", " (List.map (fun v -> v.vname) f.sformals) in
+       Logs.debug "    sformals: %s" sformals_pretty; *)
 
     (*map relevant sformals in man.local to the corresponding variables contained in the argument*)
     let arg_formal_pairs = List.combine args f.sformals in
@@ -120,10 +120,10 @@ struct
     D.join man.local relevant_arg_vars 
 
   let combine_assign man (lval:lval option) fexp (f:fundec) (args:exp list) fc au (f_ask: Queries.ask) =
-    Logs.debug "=== combine_assign of function %s ===" f.svar.vname;
-    (*how do I know which args are important? i.e. how do I match the local name of the variable in the function with the passed parameters (if there are several)*)
-    let args_pretty = String.concat ", " (List.map CilType.Exp.show args) in
-    Logs.debug "    args: %s" args_pretty;
+    (* Logs.debug "=== combine_assign of function %s ===" f.svar.vname;
+       (*how do I know which args are important? i.e. how do I match the local name of the variable in the function with the passed parameters (if there are several)*)
+       let args_pretty = String.concat ", " (List.map CilType.Exp.show args) in
+       Logs.debug "    args: %s" args_pretty; *)
 
     let simple_assign lval exp acc =
       let v = vars_from_lval lval in

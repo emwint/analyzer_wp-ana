@@ -1,9 +1,19 @@
  #include <stdlib.h>
 
 int f(int x, int y) {
-    int i = 0;
+    int i = 2;
+    
+    if (x > 0) {
+        i = i + 2;
+        return i;
+    } else {
+        i = i + 3;
+        return i + x;
+    }
+}
 
-    i = i + 1;
+int g (int x, int y) {
+    int i = 2;
     
     if (x > 0) {
         i = i + 2;
@@ -18,7 +28,17 @@ int f(int x, int y) {
 int main() {
     int a = 0;
     int c = 3;
-    int b = f(a, c);
+
+    int rand;
+
+    int (*h)(int, int); // function pointer to f
+    h = &f;
+
+    if (rand) {
+        h = &g;
+    }
+
+    int b = (*h)(a, c);
     return b;
 }
 

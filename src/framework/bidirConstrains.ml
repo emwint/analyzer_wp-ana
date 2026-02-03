@@ -11,7 +11,6 @@ sig
 end
 
 
-
 module BidirFromSpec (S_forw:Spec) (S_backw:Spec with type C.t = S_forw.C.t ) (Cfg:CfgBidir) (I:Increment)
   : sig
     module LVar : Goblint_constraint.ConstrSys.VarType with type t = [ `L_forw of VarF(S_forw.C).t | `L_backw of VarF(S_forw.C).t ]
@@ -95,14 +94,7 @@ struct
   module Forward = Constraints.FromSpec (S_forw) (Cfg) (I)
   module Backward = Constraints_wp.FromSpec (S_backw) (Cfg) 
 
-  let backw_lv_of_forw ((n,c): LV.t) : Backward.LVar.t = (n, Obj.magic c)
-  let forw_lv_of_backw ((n,c): Backward.LVar.t) : LV.t = (n, Obj.magic c)
-
-  let to_l_backw (v:LVar.t) = 
-    match v with
-    | `L_forw (n, l) -> `L_backw (n, l)
-    | `L_backw (n, l) -> `L_backw (n, l)
-
+  (* functions for converting between forwards and backwards types*)
   let getl_backw_wrapper (getl: LVar.t -> D.t) (v: node * S_forw.C.t) : S_backw.D.t =
     match getl (`L_backw v) with
     | `Lifted2 d -> d
@@ -115,7 +107,15 @@ struct
     | `Lifted2 _ -> failwith "bidirConstrains: forward local got backward value" 
     | `Bot -> S_forw.D.bot ()
     | `Top -> S_forw.D.top ()
-    | `Lifted1 d -> d
+    | `Lifted1 d -> d  
+
+  let lv_of_backw ((n,c): Backward.LVar.t) : LV.t = (n, Obj.magic c)
+
+  let to_l_backw (v:LVar.t) = 
+    match v with
+    | `L_forw (n, l) -> `L_backw (n, l)
+    | `L_backw (n, l) -> `L_backw (n, l)
+
   let cset_to_forw c =
     G.CSet.fold (fun x acc -> Forward.G.CSet.add x acc) c (Forward.G.CSet.empty ())
 
@@ -179,6 +179,8 @@ struct
     | `Bot -> `Bot
     | `Top -> `Top
 
+
+  (* actually relevant (transfer) functions*)
   let sync_backw man =
     match man.prev_node, Cfg.next man.prev_node with
     | _, _ :: _ :: _ -> (* Join in CFG. *)
@@ -326,8 +328,8 @@ struct
       if M.tracing then M.traceli "combine" "local: %a" S_backw.D.pretty cd;
       if M.tracing then M.trace "combine" "function: %a" S_backw.D.pretty fd;
 
-      Logs.debug "combine: local: %a" S_backw.D.pretty cd;
-      Logs.debug "combine: function: %a" S_backw.D.pretty fd;
+      (* Logs.debug "combine: local: %a" S_backw.D.pretty cd;
+         Logs.debug "combine: function: %a" S_backw.D.pretty fd; *)
 
       let rec cd_man =
         { man with
@@ -377,7 +379,7 @@ struct
         ) (S_backw.D.bot ()) (S_backw.paths_as_set fd_man)
       in
       if M.tracing then M.traceu "combine" "combined local: %a" S_backw.D.pretty r;
-      Logs.debug "combined local: %a" S_backw.D.pretty r;
+      (* Logs.debug "combined local: %a" S_backw.D.pretty r; *)
       r
     in
     let paths = 
@@ -409,8 +411,12 @@ struct
 
     let paths = List.combine paths paths_forw in
 
+    (* filter paths were the forward analysis found out they are unreachable*)
+    let paths = List.filter (fun ((c,v),(_,b)) -> not (S_forw.D.is_bot b)) paths in 
+
+
     (* this list now uses forward contexts*)
-    let paths = List.map (fun ((c,v),(a,b)) -> (c, S_forw.context man_forw f b, v)) paths in
+    let paths = List.map (fun ((c,v),(_,b)) -> (c, S_forw.context man_forw f b, v)) paths in
     (* List.iter (fun (c,fc,v) -> if not (S_backw.D.is_bot v) then sidel (FunctionEntry f, fc) v) paths; *)
 
     List.iter (fun (c,fc,v) -> if not (S_backw.D.is_bot v) then sidel (Function f, fc) v) paths; 
@@ -422,11 +428,11 @@ struct
     (* let paths = List.filter (fun (c,fc,v) -> not (D.is_bot v)) paths in *)
     let paths = List.map (Tuple3.map2 Option.some) paths in
     if M.tracing then M.traceli "combine" "combining";
-    Logs.debug  "combining";
+    (* Logs.debug  "combining"; *)
     let paths = List.map combine paths in
     let r = List.fold_left S_backw.D.join (S_backw.D.bot ()) paths in
     if M.tracing then M.traceu "combine" "combined: %a" S_backw.D.pretty r;
-    Logs.debug "combined: %a" S_backw.D.pretty r;
+    (* Logs.debug "combined: %a" S_backw.D.pretty r; *)
     r
 
   (*TODO: HERE AS WELL*)
@@ -467,10 +473,34 @@ struct
            Allows deactivating base. *)
         [v]
       | _ ->
+        (*constructing fake forwards manager s.t. the inforamtion for the pointer information can be retireved*)
+        let r = ref [] in
+        let rec man_forw =
+          { ask     = (fun (type a) (q: a Queries.t) -> S_forw.query man_forw q)
+          ; emit    = (fun _ -> failwith "emit outside MCP")
+          ; node    = man.node
+          ; prev_node = man.prev_node (* this is problematic, as this is backwards *)
+          ; control_context = man.control_context
+          ; context = man.context
+          ; edge    = man.edge
+          ; local   = (getl_forw (man.node, man.context ())) (* accessing forward inforkation*)
+          ; global  = (fun _ -> failwith "whoops, query for resolving function pointer depends on globals")
+          ; spawn   = (fun ?multiple _ _ _ -> failwith "manager for resolving function pointer does not support spawn")
+          ; split   = (fun (d:S_forw.D.t) es -> assert (List.is_empty es); r := d::!r) (*what is this?*)
+          ; sideg   = (fun _ _ -> failwith "manager for resolving function pointer does not support sideg")
+          } in
+        let () = Logs.debug "manager info at call to function pointer %a" Node.pretty man_forw.node in
         (* Depends on base for query. *)
-        let ad = man.ask (Queries.EvalFunvar e) in
-        Queries.AD.to_var_may ad (* TODO: don't convert, handle UnknownPtr below *) 
+        let ad = man_forw.ask (Queries.EvalFunvar e) in
+        let res = Queries.AD.to_var_may ad in (* TODO: don't convert, handle UnknownPtr below *) 
         (*PROBLEM: Pointer. Brauche Ergebnisse der anderen Analysen*)
+        (Logs.debug "(!) resolved function pointer to %d functions" (List.length res);
+         (match res with 
+          | x::xs -> 
+            List.iter (fun vi -> Logs.debug "      possible function: %s" vi.vname) res;
+          | _ -> ();
+         ));
+        res
     in
     let one_function f =
       match Cil.unrollType f.vtype with
@@ -592,8 +622,7 @@ struct
       in
       Some tf_backw
 
-
-  (*WEIRD VARIABLE TYPES??*)
+  (* TODO: non-problematic but weird inconsisteny between forward and backward variable types*)
   let system var =
     match var with
     | `L_forw v ->
@@ -610,8 +639,8 @@ struct
       system_backw v
       |> Option.map (fun tf getl sidel demandl getg sideg ->
           (* let getl' (v : Backward.LVar.t) : (S_backw.D.t) = getl (`L_backw (forw_lv_of_backw v)) |> to_backw_d in *)
-          let sidel' v d = sidel (`L_backw (forw_lv_of_backw v)) (of_backw_d d) in
-          let demandl' v = demandl (`L_backw (forw_lv_of_backw v)) in
+          let sidel' v d = sidel (`L_backw (lv_of_backw v)) (of_backw_d d) in
+          let demandl' v = demandl (`L_backw (lv_of_backw v)) in
           let getg' v = getg (`G_backw v) |> to_backw_g in
           let sideg' v d = sideg (`G_backw v) (of_backw_g d) in
           tf getl sidel' demandl' getg' sideg' |> of_backw_d
