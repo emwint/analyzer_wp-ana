@@ -1711,17 +1711,104 @@ struct
   end
   module Slvr  = (GlobSolverFromEqSolver (Goblint_solver.Selector.Make (PostSolverArg))) (EQSys) (LHT) (GHT)
 
-  (* There are a lot of things I do not use here*)
-  (* Triple of the function, context, and the local value. It uses Spec and therefore hast the wrong types.*)
-  (* module RT = AnalysisResult.ResultType2 (Spec)
-     module LT = SetDomain.HeadlessSet (RT) *)
+  (* Forward result module *)
+  (* Triple of the function, context, and the local value. It uses Spec and therefore has the wrong types.*)
+  module type ResultBundle = sig
+    module Spec : Spec
+    module RT : module type of AnalysisResult.ResultType2 (Spec)
+    module LT : module type of SetDomain.HeadlessSet (RT)
+    module Result : module type of AnalysisResult.Result (LT) (struct let result_name = "" end)
+    module ResultOutput : module type of AnalysisResultOutput.Make (Result)
+  end
 
-  (* Analysis result structure---a hashtable from program points to [LT] *)
-  (* module Result = AnalysisResult.Result (LT) (struct let result_name = "wp_analysis" end)
-     module ResultOutput = AnalysisResultOutput.Make (Result) *)
+  module ResBundle_forw : ResultBundle with module Spec = Spec_forw = 
+  struct
+    module Spec = Spec_forw
+    module RT = AnalysisResult.ResultType2 (Spec_forw)
+    module LT = SetDomain.HeadlessSet (RT)
+    module Result = AnalysisResult.Result (LT) (struct let result_name = "analysis_forw" end)
+    module ResultOutput = AnalysisResultOutput.Make (Result)
+  end
 
-  (* not having a Query module is problematic!*)
+  module ResBundle_backw : ResultBundle with module Spec = Spec_backw = 
+  struct 
+    (* Triple of the function, context, and the local value. It uses Spec and therefore has the wrong types.*)
+    module Spec = Spec_backw
+    module RT = AnalysisResult.ResultType2 (Spec_backw)
+    module LT = SetDomain.HeadlessSet (RT)
+    module Result = AnalysisResult.Result (LT) (struct let result_name = "analysis_backw" end)
+    module ResultOutput = AnalysisResultOutput.Make (Result)
+  end
+
+  (* not having a Query module is problematic! Is it?*)
   (* module Query = ResultQuery.Query (SpecSys) *)
+
+  (** this function converts the LHT to two Results of type forwards and backwards *)
+  let solver2source_result h  = 
+    let res_forw = ResBundle_forw.Result.create 113 in
+    let res_backw = ResBundle_backw.Result.create 113 in
+
+    (* Adding the state at each system variable to the final result *)
+    let add_local_var_forw (n,es) state  =
+      (* Not using Node.location here to have updated locations in incremental analysis.
+          See: https://github.com/goblint/analyzer/issues/290#issuecomment-881258091. *)
+      let state = match state with
+        | `Lifted1 s -> s
+        | `Bot -> Spec_forw.D.bot ()
+        | `Top -> Spec_forw.D.top ()
+        | `Lifted2 _ -> failwith "Unexpected backward state in forward result"
+      in
+
+      let loc = UpdateCil.getLoc n in
+      if loc <> locUnknown then try
+          let fundec = Node.find_fundec n in
+          if ResBundle_forw.Result.mem res_forw n then
+            (* If this source location has been added before, we look it up
+              * and add another node to it information to it. *)
+            let prev = ResBundle_forw.Result.find res_forw n in
+            ResBundle_forw.Result.replace res_forw n (ResBundle_forw.LT.add (es,state,fundec) prev)
+          else
+            ResBundle_forw.Result.add res_forw n (ResBundle_forw.LT.singleton (es,state,fundec))
+        (* If the function is not defined, and yet has been included to the
+          * analysis result, we generate a warning. *)
+        with Not_found ->
+          Messages.debug ~category:Analyzer ~loc:(CilLocation loc) "Calculated state for undefined function: unexpected node %a" Node.pretty_trace n
+    in
+
+    let add_local_var_backw (n,es) state  =
+      (* Not using Node.location here to have updated locations in incremental analysis.
+          See: https://github.com/goblint/analyzer/issues/290#issuecomment-881258091. *)
+
+      let state = match state with
+        | `Lifted2 s -> s
+        | `Bot -> Spec_backw.D.bot ()
+        | `Top -> Spec_backw.D.top ()
+        | `Lifted1 _ -> failwith "Unexpected forward state in backward result" 
+      in
+      let loc = UpdateCil.getLoc n in
+      if loc <> locUnknown then try
+          let fundec = Node.find_fundec n in
+          if ResBundle_backw.Result.mem res_backw n then
+            (* If this source location has been added before, we look it up
+              * and add another node to it information to it. *)
+            let prev = ResBundle_backw.Result.find res_backw n in
+            ResBundle_backw.Result.replace res_backw n (ResBundle_backw.LT.add (es,state,fundec) prev)
+          else
+            ResBundle_backw.Result.add res_backw n (ResBundle_backw.LT.singleton (es,state,fundec))
+        (* If the function is not defined, and yet has been included to the
+          * analysis result, we generate a warning. *)
+        with Not_found ->
+          Messages.debug ~category:Analyzer ~loc:(CilLocation loc) "Calculated state for undefined function: unexpected node %a" Node.pretty_trace n
+    in
+
+
+    LHT.iter (fun key -> 
+        match key with  
+        | `L_forw (n,es) -> add_local_var_forw (n,es)
+        | `L_backw (n,es) -> add_local_var_backw (n, es)) h;
+
+    res_forw, res_backw
+
 
   (** [analyze file startfuns exitfuns otherfuns] is the main function to preform the selected analyses.*)
   let analyze (file: file) (startfuns, exitfuns, otherfuns: Analyses.fundecs) =
@@ -1941,6 +2028,7 @@ struct
 
     (** this function calculates and returns  [startvars'_backw] and [entrystates_backw] *)
     let do_backward_inits () : (node * Spec_backw.C.t) list * ((node * Spec_forw.C.t) * Spec_backw.D.t) list = 
+
       let sideg_backw v d = sideg (`G_backw v) (EQSys.G.create_spec (`Lifted2 d)) in
       let getg_backw v =
         match EQSys.G.spec (getg (`G_backw v)) with
@@ -2120,7 +2208,8 @@ struct
     (** calculates and combines the solver input calculation from the forwards and backwards part of the constraint system. Returns [startvars'] and [entrystate] and [entrystates_global].*)
     let calculate_solver_input () =
       AnalysisState.global_initialization := true;
-      (* Some happen in init, so enable this temporarily (if required by option). *)
+
+      (* Spec_forw (MCP) initialization *)
       AnalysisState.should_warn := PostSolverArg.should_warn;
       Spec_forw.init None;
       Access.init file;
@@ -2249,6 +2338,20 @@ struct
       in
       log_lh_contents lh;
 
+      let make_global_fast_xml f g =
+        let open Printf in
+        let print_globals k v =
+          fprintf f "\n<glob><key>%s</key>%a</glob>" (XmlUtil.escape (EQSys.GVar.show k)) EQSys.G.printXml v;
+        in
+        GHT.iter print_globals g
+      in
+
+      let liveness _ = true in
+
+      let local_xml_forw, local_xml_backw = solver2source_result lh in
+
+      (* ResBundle_forw.ResultOutput.output (lazy local_xml_forw) liveness gh make_global_fast_xml (module FileCfg);  *)
+      ResBundle_backw.ResultOutput.output (lazy local_xml_backw) liveness gh make_global_fast_xml (module FileCfg)
     in
 
     solve();

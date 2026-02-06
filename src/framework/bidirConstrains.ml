@@ -10,11 +10,70 @@ sig
   val increment: increment_data option
 end
 
+module GVarF2 (V_forw: SpecSysVar) (V_backw : SpecSysVar) : 
+sig 
+  include VarType with type t = [ `G_forw of GVarF(V_forw).t | `G_backw of GVarF(V_backw).t ]
+  include SpecSysVar with type t := t
+end
+=
+struct
+  module GV_forw = GVarF (V_forw)
+  module GV_backw = GVarF (V_backw)  
+  type t = [ `G_forw of GV_forw.t | `G_backw of GV_backw.t ] [@@deriving eq, ord, hash]
+  let name () = "BidirFromSpec"
+
+  let tag _ = failwith "Std: no tag"
+
+  let relift = function
+    | `G_forw x -> `G_forw (GV_forw.relift x)
+    | `G_backw x -> `G_backw (GV_backw.relift x)
+
+  let pretty_trace () = function
+    | `G_forw a -> GoblintCil.Pretty.dprintf "G_forw:%a" GV_forw.pretty_trace a
+    | `G_backw a -> GoblintCil.Pretty.dprintf "G_backw:%a" GV_backw.pretty_trace a
+
+  let printXml f = function
+    | `G_forw a -> GV_forw.printXml f a
+    | `G_backw a -> GV_backw.printXml f a
+
+  let node = function
+    | `G_forw a -> GV_forw.node a
+    | `G_backw a -> GV_backw.node a
+
+  let is_write_only = function
+    | `G_forw a -> GV_forw.is_write_only a
+    | `G_backw a -> GV_backw.is_write_only a
+
+  let show = function
+    | `G_forw a -> GV_forw.show a
+    | `G_backw a -> GV_backw.show a
+
+  let pretty () = function
+    | `G_forw a -> GV_forw.pretty () a
+    | `G_backw a -> GV_backw.pretty () a
+  let to_yojson = function
+    | `G_forw a -> GV_forw.to_yojson a
+    | `G_backw a -> GV_backw.to_yojson a
+
+  let spec = function
+    | `G_forw a -> GV_forw.spec a
+    | `G_backw a -> GV_backw.spec a
+
+  let contexts = function
+    | `G_forw a -> GV_forw.contexts a
+    | `G_backw a -> GV_backw.contexts a
+
+  let var_id = show
+
+  let arbitrary () =
+    failwith "no arbitrary"
+end 
+
 
 module BidirFromSpec (S_forw:Spec) (S_backw:Spec with type C.t = S_forw.C.t ) (Cfg:CfgBidir) (I:Increment)
   : sig
     module LVar : Goblint_constraint.ConstrSys.VarType with type t = [ `L_forw of VarF(S_forw.C).t | `L_backw of VarF(S_forw.C).t ]
-    module GVar : Goblint_constraint.ConstrSys.VarType with type t = [ `G_forw of GVarF(S_forw.V).t | `G_backw of GVarF(S_backw.V).t ]
+    module GVar : (module type of GVarF2(S_forw.V)(S_backw.V))
     include DemandGlobConstrSys with module LVar := LVar
                                  and module GVar := GVar
                                  and module D = Lattice.Lift2(S_forw.D)(S_backw.D)
@@ -58,34 +117,7 @@ struct
   module D = Lattice.Lift2(S_forw.D)(S_backw.D)
   module GV_forw = GVarF (S_forw.V)
   module GV_backw = GVarF (S_backw.V)
-  module GVar =
-  struct
-    type t = [ `G_forw of GV_forw.t | `G_backw of GV_backw.t ] [@@deriving eq, ord, hash]
-
-    let relift = function
-      | `G_forw x -> `G_forw (GV_forw.relift x)
-      | `G_backw x -> `G_backw (GV_backw.relift x)
-
-    let pretty_trace () = function
-      | `G_forw a -> GoblintCil.Pretty.dprintf "G_forw:%a" GV_forw.pretty_trace a
-      | `G_backw a -> GoblintCil.Pretty.dprintf "G_backw:%a" GV_backw.pretty_trace a
-
-    let printXml f = function
-      | `G_forw a -> GV_forw.printXml f a
-      | `G_backw a -> GV_backw.printXml f a
-
-    let var_id = function
-      | `G_forw a -> GV_forw.var_id a
-      | `G_backw a -> GV_backw.var_id a
-
-    let node = function
-      | `G_forw a -> GV_forw.node a
-      | `G_backw a -> GV_backw.node a
-
-    let is_write_only = function
-      | `G_forw a -> GV_forw.is_write_only a
-      | `G_backw a -> GV_backw.is_write_only a
-  end
+  module GVar = GVarF2(S_forw.V)(S_backw.V)
 
   module G_forw = GVarG (S_forw.G) (S_forw.C)
   module G_backw = GVarG (S_backw.G) (S_forw.C)
@@ -215,7 +247,7 @@ struct
       (* TODO: adjust man node/edge? *)
       (* TODO: don't repeat for all paths that spawn same *)
 
-      (* This porbalbly needs to be changed for backwards*)
+      (* TODO: This needs to be changed for backwards!! Context is created using S_backw.context*)
       let ds = S_backw.threadenter ~multiple man lval f args in
       List.iter (fun d ->
           spawns := (lval, f, args, d, multiple) :: !spawns;
@@ -560,6 +592,7 @@ struct
       | Skip           -> tf_skip_backw var edge prev_node
     end getl getl_forw sidel demandl getg sideg d
 
+  (* TODO: Don't call it prev_node when it is actually the next node. *)
   let tf_backw var getl getl_forw sidel demandl getg sideg prev_node (_,edge) d (f,t) =
     (* let old_loc  = !Goblint_tracing.current_loc in
        let old_loc2 = !Goblint_tracing.next_loc in
