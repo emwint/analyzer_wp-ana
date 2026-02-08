@@ -6,6 +6,7 @@ open Batteries
 open GoblintCil
 open MyCFG
 open Analyses
+open BackwAnalyses
 open Goblint_constraint.ConstrSys
 open Goblint_constraint.Translators
 open Goblint_constraint.SolverTypes
@@ -1686,7 +1687,7 @@ struct
 end
 
 (** Given a [Cfg], a [Spec_forw], [Spec_back], and an unused [Inc], computes the solution] *)
-module AnalyzeCFG_bidir (Cfg:CfgBidirSkip) (Spec_forw:Spec) (Spec_backw: Spec with type C.t = Spec_forw.C.t ) (Inc:Increment) =
+module AnalyzeCFG_bidir (Cfg:CfgBidirSkip) (Spec_forw:Spec) (Spec_backw: Spec with type C.t = Spec_forw.C.t ) (Spec_backwA : BackwSpec) (Inc:Increment) =
 struct
 
   (* The Equation system *)
@@ -1730,15 +1731,15 @@ struct
     module ResultOutput = AnalysisResultOutput.Make (Result)
   end
 
-  module ResBundle_backw : ResultBundle with module Spec = Spec_backw = 
-  struct 
-    (* Triple of the function, context, and the local value. It uses Spec and therefore has the wrong types.*)
-    module Spec = Spec_backw
-    module RT = AnalysisResult.ResultType2 (Spec_backw)
-    module LT = SetDomain.HeadlessSet (RT)
-    module Result = AnalysisResult.Result (LT) (struct let result_name = "analysis_backw" end)
-    module ResultOutput = AnalysisResultOutput.Make (Result)
-  end
+  (* module ResBundle_backw : ResultBundle with module Spec = Spec_backw = 
+     struct 
+     (* Triple of the function, context, and the local value. It uses Spec and therefore has the wrong types.*)
+     module Spec = Spec_backw
+     module RT = AnalysisResult.ResultType2 (Spec_backw)
+     module LT = SetDomain.HeadlessSet (RT)
+     module Result = AnalysisResult.Result (LT) (struct let result_name = "analysis_backw" end)
+     module ResultOutput = AnalysisResultOutput.Make (Result)
+     end *)
 
   (* not having a Query module is problematic! Is it?*)
   (* module Query = ResultQuery.Query (SpecSys) *)
@@ -1746,7 +1747,7 @@ struct
   (** this function converts the LHT to two Results of type forwards and backwards *)
   let solver2source_result h  = 
     let res_forw = ResBundle_forw.Result.create 113 in
-    let res_backw = ResBundle_backw.Result.create 113 in
+    (* let res_backw = ResBundle_backw.Result.create 113 in *)
 
     (* Adding the state at each system variable to the final result *)
     let add_local_var_forw (n,es) state  =
@@ -1775,18 +1776,18 @@ struct
           Messages.debug ~category:Analyzer ~loc:(CilLocation loc) "Calculated state for undefined function: unexpected node %a" Node.pretty_trace n
     in
 
-    let add_local_var_backw (n,es) state  =
-      (* Not using Node.location here to have updated locations in incremental analysis.
+    (* let add_local_var_backw (n,es) state  =
+       (* Not using Node.location here to have updated locations in incremental analysis.
           See: https://github.com/goblint/analyzer/issues/290#issuecomment-881258091. *)
 
-      let state = match state with
+       let state = match state with
         | `Lifted2 s -> s
         | `Bot -> Spec_backw.D.bot ()
         | `Top -> Spec_backw.D.top ()
         | `Lifted1 _ -> failwith "Unexpected forward state in backward result" 
-      in
-      let loc = UpdateCil.getLoc n in
-      if loc <> locUnknown then try
+       in
+       let loc = UpdateCil.getLoc n in
+       if loc <> locUnknown then try
           let fundec = Node.find_fundec n in
           if ResBundle_backw.Result.mem res_backw n then
             (* If this source location has been added before, we look it up
@@ -1799,15 +1800,15 @@ struct
           * analysis result, we generate a warning. *)
         with Not_found ->
           Messages.debug ~category:Analyzer ~loc:(CilLocation loc) "Calculated state for undefined function: unexpected node %a" Node.pretty_trace n
-    in
+       in *)
 
 
     LHT.iter (fun key -> 
         match key with  
         | `L_forw (n,es) -> add_local_var_forw (n,es)
-        | `L_backw (n,es) -> add_local_var_backw (n, es)) h;
+        | `L_backw (n,es) -> (fun _ -> ())  (* add_local_var_backw (n, es))*) ) h;
 
-    res_forw, res_backw
+    res_forw(*, res_backw*)
 
 
   (** [analyze file startfuns exitfuns otherfuns] is the main function to preform the selected analyses.*)
@@ -2348,10 +2349,62 @@ struct
 
       let liveness _ = true in
 
-      let local_xml_forw, local_xml_backw = solver2source_result lh in
+      let local_xml_forw = solver2source_result lh in
 
-      (* ResBundle_forw.ResultOutput.output (lazy local_xml_forw) liveness gh make_global_fast_xml (module FileCfg);  *)
-      ResBundle_backw.ResultOutput.output (lazy local_xml_backw) liveness gh make_global_fast_xml (module FileCfg)
+      ResBundle_forw.ResultOutput.output (lazy local_xml_forw) liveness gh make_global_fast_xml (module FileCfg); 
+      (* ResBundle_backw.ResultOutput.output (lazy local_xml_backw) liveness gh make_global_fast_xml (module FileCfg) *)
+
+      (*This is disgusting, but I have more imprtant things to do right now*)
+      let output_wp_results_to_xml lh =
+        (* iterate through all nodes and update corresponding .xml in result/nodes *)
+        LHT.iter (fun v state ->
+            match v with
+            | `L_forw _ -> ()
+            | `L_backw (node, c) -> (
+                let state = match state with
+                  | `Lifted2 d -> d
+                  | _ -> failwith "Expected backward state"
+                in
+                try
+                  let node_id_str = Node.show_id node in
+
+                  let xml_path = Filename.concat "./result/nodes" (node_id_str ^ ".xml") in
+                  if Sys.file_exists xml_path then (
+                    (* Read existing XML *)
+                    let ic = Stdlib.open_in xml_path in
+                    let content = Stdlib.really_input_string ic (Stdlib.in_channel_length ic) in
+                    Stdlib.close_in ic;
+
+                    (* Create WP analysis data *)
+                    let wp_res = Pretty.sprint 100 (Spec_backw.D.pretty () state) in
+                    let wp_data =
+                      "\n<wp_path>\n<analysis name=\"wp_test\">\n<value>\n<data>" ^ wp_res ^" \n</data>\n</value>\n</analysis>\n</wp_path>\n"
+                    in
+
+                    (* Insert before </path>*)
+                    let close_pattern = "</call>" in
+                    let updated_content =
+                      try
+                        let insert_pos = Str.search_backward (Str.regexp_string close_pattern) content (String.length content) in
+                        let before = String.sub content 0 insert_pos in
+                        let after = String.sub content insert_pos (String.length content - insert_pos) in
+                        before ^ wp_data ^ after
+                      with Not_found ->
+                        content ^ wp_data
+                    in
+
+                    (* Write back *)
+                    let oc = Stdlib.open_out xml_path in
+                    Stdlib.output_string oc updated_content;
+                    Stdlib.close_out oc;
+                    Logs.debug "Updated XML file for node %s" node_id_str
+                  )
+                with _ -> ()  (* Skip errors silently *)
+              )
+          ) lh
+      in
+
+      output_wp_results_to_xml lh;
     in
 
     solve();
@@ -2371,7 +2424,8 @@ let rec analyze_loop (module CFG : CfgBidirSkip) file fs change_info =
     (* let module B = AnalyzeCFG_backw (CFG) (DummyWPSPec) (struct let increment = change_info end) in *)
 
     let module DummyWPSPec = ContextOverride (DummyWPSPec) (Spec)  in
-    let module C = AnalyzeCFG_bidir (CFG) (Spec) (DummyWPSPec) (struct let increment = change_info end) in 
+    let module LivenesSpec = Wp_test.BackwSpec (Spec) in
+    let module C = AnalyzeCFG_bidir (CFG) (Spec) (DummyWPSPec) (LivenesSpec) (struct let increment = change_info end) in 
 
     GobConfig.with_immutable_conf (fun () ->
         (* A.analyze file fs;

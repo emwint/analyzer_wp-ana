@@ -5,7 +5,7 @@ int f(int x, int y) {
     
     if (x > 0) {
         i = i + 2;
-        return i;
+        return i + y;
     } else {
         i = i + 3;
         return i + x;
@@ -34,12 +34,15 @@ int main() {
     int (*h)(int, int); // function pointer to f
     h = &f;
 
-    if (rand) {
-        h = &g;
-    }
+    // if (rand) {
+    //     h = &g;
+    // }
+    int d = (*h)(a, c);
+    
+    a = -100;
 
     int b = (*h)(a, c);
-    return b;
+    return b + d;
 }
 
 //git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ml|mli)$' | xargs -I {} ocp-indent -i {}
