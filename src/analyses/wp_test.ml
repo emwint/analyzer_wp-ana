@@ -161,24 +161,13 @@ struct
   include BackwAnalyses.DefaultBackwSpec (ForwSpec)
   module C = ForwSpec.C
 
-  (* Adding those because the "include" makes problems*)
+  (* Adding those because the "include" of the DefaultBackwSpec is nor enough*)
   module D_forw = ForwSpec.D
   module G_forw = ForwSpec.G
   module V_forw = ForwSpec.V
   module P_forw = ForwSpec.P
   let name () = "wp_test"
 
-  (* include Analyses.DefaultBackwSpec *)
-
-  (* include Analyses.IdentitySpec  *)
-  (*## context ##*)
-  (*Idea: make context type passsable, so add parameter.*)
-  (* module C = Printable.Unit *)
-
-  (* let context man _ _ = ()
-     let startcontext () = () *)
-
-  (*## end of context ##*)
   module G = Lattice.Unit
   module V = EmptyV
   module P = EmptyP
@@ -189,12 +178,36 @@ struct
   let startstate v = D.empty()
   let exitstate v = D.empty()
 
-  let vars_from_lval (l: lval) = 
-    match l with
-    | Var v, NoOffset when isIntegralType v.vtype && not (v.vglob || v.vaddrof) -> Some v (* local integer variable whose address is never taken *)
-    | _, _ -> None (*do not know what to do here yet*)
+  let rec vars_from_lval (l: lval) : varinfo list  = 
+    let vars_written_to =  
+      match l with
+      | Var v, _ ->  [v] (* variable *) 
+      | Mem m, _ -> (D.elements (vars_from_expr m))
+    in
 
-  let vars_from_expr (e: exp) : D.t=
+    let vars_in_offset = 
+      match l with
+      | Var _, off -> vars_from_offset off
+      | Mem _, off -> vars_from_offset off
+    in
+
+    (vars_written_to @ vars_in_offset)
+  and
+
+    vars_from_offset (off: offset) : varinfo list =
+    match off with
+    | NoOffset -> []
+    | Field (_, off) -> vars_from_offset off
+    | Index (e, off) -> 
+      let vars_in_e = (D.elements (vars_from_expr e)) in
+      let vars_in_off = vars_from_offset off in
+      (match vars_in_off with
+       | [] -> []
+       | vars_in_off ->  (vars_in_e @ vars_in_off))
+
+  and 
+
+    vars_from_expr (e: exp) : D.t=
     let rec aux acc e =
       match e with
       | Lval (Var v, _)       ->  D.add v acc
@@ -210,8 +223,8 @@ struct
         aux acc2 e3
       | CastE (_, e1)         ->   aux acc e1
       | AddrOf (l1)          ->   (match vars_from_lval l1 with
-          | None -> acc
-          | Some v -> D.add v acc)
+          | [] -> acc
+          |  v -> D.join (D.of_list v) acc)
       | _ -> acc 
     in
     aux (D.empty()) e
@@ -221,14 +234,34 @@ struct
     let v = vars_from_lval lval in
 
     match v with
-    | None -> D.join man.local (vars_from_expr rval) (*if I do not know what the value is assigned to, then all RHS-Variables might be relevant*)
-    | Some v -> 
-      let l = (D.diff man.local (D.singleton v)) in
-      if D.mem v man.local then D.join l (vars_from_expr rval)
-      else l
+    | [] -> D.join man.local (vars_from_expr rval) (*if I do not know what the value is assigned to, then all RHS-Variables might be relevant*)
+    | v-> 
+      let l = (D.diff man.local (D.of_list v)) in
+      if (List.exists (fun elem -> D.mem elem man.local) v) then D.join l (vars_from_expr rval) (*if anything on the rhs is important, this is live now*)
+      else (
+        let loc = M.Location.Node man.node in
+        (match v with
+         | v::_ -> M.warn ~loc:loc  "Unnecessary assignment to variable %s, as it is not live at this program point" v.vname
+         | [] -> () (*this case is already handled above*)
+        ); l)
 
-  let branch man man_forw (exp:exp) (tv:bool) =
-    D.join man.local (vars_from_expr exp)
+  let branch man man_forw (exp:exp) (tv:bool) =  
+    (* This just randomly asks whether all loops terimante to use getg_forw utilized in man.global *)
+    (* let () =
+       match man_forw.ask(Queries.MustTermAllLoops) with
+       | true -> Logs.debug "MustTermAllLoops is TRUE"
+       | _ -> Logs.debug "MustTermAllLoops is NOT TRUE"
+       in *)
+
+    let branch_irrelevant : bool= (
+      match Queries.eval_bool (Analyses.ask_of_man man_forw) exp with
+      | `Lifted b -> tv <> b
+      | `Bot -> false
+      | `Top -> false
+    )
+    in
+    if branch_irrelevant then vars_from_expr exp
+    else D.join man.local (vars_from_expr exp)
 
   let body man man_forw (f:fundec) =
     man.local
@@ -262,6 +295,7 @@ struct
        Logs.debug "    sformals: %s" sformals_pretty; *)
 
     (*map relevant sformals in man.local to the corresponding variables contained in the argument*)
+
     let arg_formal_pairs = List.combine args f.sformals in
     let relevant_arg_vars = 
       List.fold_left (fun acc (arg_exp, formal_var) ->
@@ -281,20 +315,25 @@ struct
        let args_pretty = String.concat ", " (List.map CilType.Exp.show args) in
        Logs.debug "    args: %s" args_pretty; *)
 
+    let exp_vars = vars_from_expr fexp in 
+
+    Logs.debug "(!) combine_assign: exp_vars = %s" (String.concat ", " (List.map (fun v -> v.vname) (D.elements exp_vars)));
+
     let simple_assign lval exp acc =
-      let v = vars_from_lval lval in
+      let v = vars_from_lval lval
+      in
 
       match v with
-      | None -> acc  (*D.join acc (vars_from_expr exp) if I do not know what the value is assigned to, then all RHS-Variables might be relevant *)
-      | Some v -> 
-        let l = (D.diff acc (D.singleton v)) in
+      | [] -> acc  (*D.join acc (vars_from_expr exp) if I do not know what the value is assigned to, then all RHS-Variables might be relevant *)
+      |  v -> 
+        let l = (D.diff acc (D.of_list v)) in
         (* if D.mem v acc then D.join l (vars_from_expr exp)
            else l *)
         l
     in
 
     match lval with 
-    | Some lval -> List.fold_right (fun exp acc -> simple_assign lval exp acc) args man.local
+    | Some lval -> D.union (List.fold_right (fun exp acc -> simple_assign lval exp acc) args man.local) exp_vars
     | _ -> man.local
 
 

@@ -1687,9 +1687,9 @@ struct
 end
 
 (** Given a [Cfg], a [Spec_forw], [Spec_back], and an unused [Inc], computes the solution] *)
-module AnalyzeCFG_bidir (Cfg:CfgBidirSkip) (Spec_forw:Spec) (Spec_backw: Spec with type C.t = Spec_forw.C.t ) (Spec_backwA : BackwSpec) (Inc:Increment) =
+module AnalyzeCFG_bidir (Cfg:CfgBidirSkip) (Spec_forw:Spec) (BackwSpecSpec : BackwAnalyses.BackwSpecSpec) (Inc:Increment) =
 struct
-
+  module Spec_backw = BackwSpecSpec (Spec_forw)
   (* The Equation system *)
   module EQSys = BidirConstrains.BidirFromSpec (Spec_forw) (Spec_backw) (Cfg) (Inc)
 
@@ -1731,19 +1731,6 @@ struct
     module ResultOutput = AnalysisResultOutput.Make (Result)
   end
 
-  (* module ResBundle_backw : ResultBundle with module Spec = Spec_backw = 
-     struct 
-     (* Triple of the function, context, and the local value. It uses Spec and therefore has the wrong types.*)
-     module Spec = Spec_backw
-     module RT = AnalysisResult.ResultType2 (Spec_backw)
-     module LT = SetDomain.HeadlessSet (RT)
-     module Result = AnalysisResult.Result (LT) (struct let result_name = "analysis_backw" end)
-     module ResultOutput = AnalysisResultOutput.Make (Result)
-     end *)
-
-  (* not having a Query module is problematic! Is it?*)
-  (* module Query = ResultQuery.Query (SpecSys) *)
-
   (** this function converts the LHT to two Results of type forwards and backwards *)
   let solver2source_result h  = 
     let res_forw = ResBundle_forw.Result.create 113 in
@@ -1775,33 +1762,6 @@ struct
         with Not_found ->
           Messages.debug ~category:Analyzer ~loc:(CilLocation loc) "Calculated state for undefined function: unexpected node %a" Node.pretty_trace n
     in
-
-    (* let add_local_var_backw (n,es) state  =
-       (* Not using Node.location here to have updated locations in incremental analysis.
-          See: https://github.com/goblint/analyzer/issues/290#issuecomment-881258091. *)
-
-       let state = match state with
-        | `Lifted2 s -> s
-        | `Bot -> Spec_backw.D.bot ()
-        | `Top -> Spec_backw.D.top ()
-        | `Lifted1 _ -> failwith "Unexpected forward state in backward result" 
-       in
-       let loc = UpdateCil.getLoc n in
-       if loc <> locUnknown then try
-          let fundec = Node.find_fundec n in
-          if ResBundle_backw.Result.mem res_backw n then
-            (* If this source location has been added before, we look it up
-              * and add another node to it information to it. *)
-            let prev = ResBundle_backw.Result.find res_backw n in
-            ResBundle_backw.Result.replace res_backw n (ResBundle_backw.LT.add (es,state,fundec) prev)
-          else
-            ResBundle_backw.Result.add res_backw n (ResBundle_backw.LT.singleton (es,state,fundec))
-        (* If the function is not defined, and yet has been included to the
-          * analysis result, we generate a warning. *)
-        with Not_found ->
-          Messages.debug ~category:Analyzer ~loc:(CilLocation loc) "Calculated state for undefined function: unexpected node %a" Node.pretty_trace n
-       in *)
-
 
     LHT.iter (fun key -> 
         match key with  
@@ -1855,9 +1815,9 @@ struct
     let do_forward_inits () : (node * Spec_forw.C.t) list * ((node * Spec_forw.C.t) * Spec_forw.D.t) list = 
 
       (* wrapping functions accessing and modifying global variables *)
-      let sideg_forw v d = sideg (`G_forw (v)) ((`Lifted1 d)) in
+      let sideg_forw v d = sideg (`Forw (v)) ((`Lifted1 d)) in
       let getg_forw v =
-        match EQSys.G.spec (getg (`G_forw v)) with
+        match EQSys.G.spec (getg (`Forw v)) with
         | `Lifted1 g -> G_forw.create_spec g
         | `Bot ->  failwith "Unexpected global state" (*G_forw.bot (); *)
         | `Top ->  failwith "Unexpected global state" (*G_forw.top ()*)
@@ -2030,16 +1990,16 @@ struct
     (** this function calculates and returns  [startvars'_backw] and [entrystates_backw] *)
     let do_backward_inits () : (node * Spec_backw.C.t) list * ((node * Spec_forw.C.t) * Spec_backw.D.t) list = 
 
-      let sideg_backw v d = sideg (`G_backw v) (EQSys.G.create_spec (`Lifted2 d)) in
+      let sideg_backw v d = sideg (`Backw v) (EQSys.G.create_spec (`Lifted2 d)) in
       let getg_backw v =
-        match EQSys.G.spec (getg (`G_backw v)) with
+        match EQSys.G.spec (getg (`Backw v)) with
         | `Lifted1 _ -> failwith "Unexpected backward global state"
         | `Bot -> G_backw.bot ()
         | `Top -> G_backw.top ()
         | `Lifted2 g -> G_backw.create_spec g
       in
 
-      let do_extern_inits_backw man (file: file) : Spec_backw.D.t =
+      let do_extern_inits_backw man man_forw (file: file) : Spec_backw.D.t =
         let module VS = Set.Make (Basetype.Variables) in
         let add_glob s = function
           | GVar (v,_,_) -> VS.add v s
@@ -2047,7 +2007,7 @@ struct
         in
         let vars = foldGlobals file add_glob VS.empty in
         let set_bad v st =
-          Spec_backw.assign {man with local = st} (var v) MyCFG.unknown_exp
+          Spec_backw.assign {man with local = st} man_forw (var v) MyCFG.unknown_exp
         in
         let is_std = function
           | {vname = ("__tzname" | "__daylight" | "__timezone"); _} (* unix time.h *)
@@ -2085,13 +2045,29 @@ struct
           }
         in
 
+        let man_forw =
+          { ask     = (fun (type a) (q: a Queries.t) -> Queries.Result.top q)
+          ; emit   = (fun _ -> failwith "Cannot \"emit\" in global initializer context.")
+          ; node    = MyCFG.dummy_node
+          ; prev_node = MyCFG.dummy_node
+          ; control_context = (fun () -> man_failwith "Global initializers have no context.")
+          ; context = (fun () -> man_failwith "Global initializers have no context.")
+          ; edge    = MyCFG.Skip
+          ; local   = Spec_forw.D.top () (*TODO: SOULD I GET THE VALUE FROM THE FORWARD INITIALIZATION?*)
+          ; global  = (fun _ -> Spec_forw.G.bot ())
+          ; spawn   = (fun ?(multiple=false) _ -> failwith "Global initializers should never spawn threads. What is going on?")
+          ; split   = (fun _ -> failwith "Global initializers trying to split paths.")
+          ; sideg   = (fun _ _ -> failwith "forw_man in the backwards initialization should not be used to sideeffect globals.")
+          }
+        in
+
         let edges = CfgTools.getGlobalInits file in
         Logs.debug "Executing %d assigns." (List.length edges);
         let funs = ref [] in
 
         let transfer_func (st : Spec_backw.D.t) (loc, edge) : Spec_backw.D.t =
           match edge with
-          | MyCFG.Entry func        -> Spec_backw.body {man with local = st} func
+          | MyCFG.Entry func        -> Spec_backw.body {man with local = st} man_forw func
           | MyCFG.Assign (lval,exp) ->
             begin match lval, exp with
               | (Var v,o), (AddrOf (Var f,NoOffset))
@@ -2099,14 +2075,14 @@ struct
                 (try funs := Cilfacade.find_varinfo_fundec f :: !funs with Not_found -> ())
               | _ -> ()
             end;
-            let res = Spec_backw.assign {man with local = st} lval exp in
+            let res = Spec_backw.assign {man with local = st} man_forw lval exp in
             (* Needed for privatizations (e.g. None) that do not side immediately *)
-            let res' = Spec_backw.sync {man with local = res} `Normal in
+            let res' = Spec_backw.sync {man with local = res} man_forw `Normal in
             res'
           | _                       -> failwith "Unsupported global initializer edge"
         in
 
-        let with_externs = do_extern_inits_backw man file in
+        let with_externs = do_extern_inits_backw man man_forw file in
         let result : Spec_backw.D.t = List.fold_left transfer_func with_externs edges in
         result, !funs
       in
@@ -2133,8 +2109,24 @@ struct
             ; sideg   = (fun g d -> sideg_backw (GV_backw.spec g) d)
             }
           in
+          let man_forw =
+            { ask     = (fun (type a) (q: a Queries.t) -> Queries.Result.top q)
+            ; emit   = (fun _ -> failwith "Cannot \"emit\" in global initializer context.")
+            ; node    = man.node
+            ; prev_node = MyCFG.dummy_node (* SHOULD I USE DUMMY NODES HERE IN GENERAL? I PROBABLY SHOULÖD*)
+            ; control_context = (fun () -> man_failwith "Global initializers have no context.")
+            ; context = man.context
+            ; edge    = MyCFG.Skip
+            ; local   = Spec_forw.D.top () (*TODO: SOULD I GET THE VALUE FROM THE FORWARD INITIALIZATION?*)
+            ; global  = (fun _ -> Spec_forw.G.bot ()) (*TODO: SHOULD I ALLOW TO ASK FOR GLOBALS?*)
+            ; spawn   = (fun ?(multiple=false) _ -> failwith "Global initializers should never spawn threads. What is going on?")
+            ; split   = (fun _ -> failwith "Global initializers trying to split paths.")
+            ; sideg   = (fun _ _ -> failwith "forw_man in the backwards initialization should not be used to sideeffect globals.")
+            }
+          in
+
           let args = List.map (fun x -> MyCFG.unknown_exp) fd.sformals in
-          let ents = Spec_backw.enter man None fd args in
+          let ents = Spec_backw.enter man man_forw None fd args in
           List.map (fun (_,s) -> fd, s) ents
         in
 
@@ -2165,8 +2157,24 @@ struct
             ; sideg   = (fun g d -> sideg_backw (GV_backw.spec g) d)
             }
           in
+
+          let man_forw =
+            { ask     = (fun (type a) (q: a Queries.t) -> Queries.Result.top q)
+            ; emit   = (fun _ -> failwith "Cannot \"emit\" in otherstate context.")
+            ; node    = man.node
+            ; prev_node = MyCFG.dummy_node
+            ; control_context = (fun () -> man_failwith "enter_func has no context.")
+            ; context = (fun () -> man_failwith "enter_func has no context.")
+            ; edge    = MyCFG.Skip
+            ; local   = Spec_forw.D.top () (*TODO: SOULD I GET THE VALUE FROM THE FORWARD INITIALIZATION?*)
+            ; global  = (fun _ -> Spec_forw.G.bot ()) (*TODO: SHOULD I ALLOW TO ASK FOR GLOBALS?*)
+            ; spawn   = (fun ?(multiple=false) _ -> failwith "Bug1: Using enter_func for toplevel functions with 'otherstate'.")
+            ; split   = (fun _ -> failwith "Bug2: Using enter_func for toplevel functions with 'otherstate'.")
+            ; sideg   = (fun _ _ -> failwith "forw_man in the backwards initialization should not be used to sideeffect globals.")
+            }
+          in
           (* TODO: don't hd *)
-          List.hd (Spec_backw.threadenter man ~multiple:false None v [])
+          List.hd (Spec_backw.threadenter man man_forw ~multiple:false None v [])
           (* TODO: do threadspawn to mainfuns? *)
         in
         let prestartstate = Spec_backw.startstate MyCFG.dummy_func.svar in (* like in do_extern_inits *)
@@ -2208,8 +2216,6 @@ struct
 
     (** calculates and combines the solver input calculation from the forwards and backwards part of the constraint system. Returns [startvars'] and [entrystate] and [entrystates_global].*)
     let calculate_solver_input () =
-      AnalysisState.global_initialization := true;
-
       (* Spec_forw (MCP) initialization *)
       AnalysisState.should_warn := PostSolverArg.should_warn;
       Spec_forw.init None;
@@ -2339,6 +2345,43 @@ struct
       in
       log_lh_contents lh;
 
+      let joined_by_loc_backw, joined_by_node_backw =
+        let open Enum in
+        let node_values = LHT.enum lh in
+        let node_backw_values =  filter_map (
+            fun (key, d) -> 
+              match key with 
+              | `L_forw (_,_)  ->  None 
+              | `L_backw (node, context) -> 
+                (match d with 
+                 | `Lifted2 d -> Some (node, d)
+                 | _ -> None)
+          ) node_values 
+        in
+        let hashtbl_size = if fast_count node_values then count node_values else 123 in
+        let by_loc, by_node = Hashtbl.create hashtbl_size, NodeH.create hashtbl_size in
+        iter (fun (node, v) ->
+            let loc = match node with
+              | Statement s -> Cil.get_stmtLoc s.skind (* nosemgrep: cilfacade *) (* Must use CIL's because syntactic search is in CIL. *)
+              | FunctionEntry _ | Function _ -> Node.location node
+            in
+            (* join values once for the same location and once for the same node *)
+            let join = Option.some % function None -> v | Some v' -> Spec_backw.D.join v v' in
+            Hashtbl.modify_opt loc join by_loc;
+            NodeH.modify_opt node join by_node;
+          ) node_backw_values; 
+        by_loc, by_node
+      in
+
+      (* NodeH.iter (fun node d -> 
+         match node with 
+         | Statement s -> (
+          match s. with 
+          | _ -> ()
+         )
+         | _ -> ()
+         ) joined_by_node_backw; *)
+
       let make_global_fast_xml f g =
         let open Printf in
         let print_globals k v =
@@ -2424,8 +2467,8 @@ let rec analyze_loop (module CFG : CfgBidirSkip) file fs change_info =
     (* let module B = AnalyzeCFG_backw (CFG) (DummyWPSPec) (struct let increment = change_info end) in *)
 
     let module DummyWPSPec = ContextOverride (DummyWPSPec) (Spec)  in
-    let module LivenesSpec = Wp_test.BackwSpec (Spec) in
-    let module C = AnalyzeCFG_bidir (CFG) (Spec) (DummyWPSPec) (LivenesSpec) (struct let increment = change_info end) in 
+    let module LivenesSpec = Wp_test.BackwSpec in
+    let module C = AnalyzeCFG_bidir (CFG) (Spec) (LivenesSpec) (struct let increment = change_info end) in 
 
     GobConfig.with_immutable_conf (fun () ->
         (* A.analyze file fs;

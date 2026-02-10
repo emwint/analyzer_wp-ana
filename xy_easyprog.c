@@ -39,10 +39,10 @@ int main() {
     // }
     int d = (*h)(a, c);
     
-    a = -100;
+    // a = -100;
 
-    int b = (*h)(a, c);
-    return b + d;
+    // int b = (*h)(a, c);
+    return d;
 }
 
 //git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ml|mli)$' | xargs -I {} ocp-indent -i {}
